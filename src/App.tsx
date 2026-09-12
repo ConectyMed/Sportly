@@ -1,6 +1,7 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router'
 import { AppShell } from '@/components/layout/AppShell'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Skeleton } from '@/components/ui/Primitives'
 import { useReducedMotionPref, useThemeSync } from '@/lib/theme'
 import { useStore } from '@/store/useStore'
@@ -47,6 +48,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ThemeBridge />
+      <ErrorBoundary>
       <Suspense fallback={<Fallback />}>
         <Routes>
           <Route path="/onboarding" element={<OnboardingScreen />} />
@@ -89,6 +91,7 @@ export default function App() {
           </Route>
         </Routes>
       </Suspense>
+      </ErrorBoundary>
     </BrowserRouter>
   )
 }

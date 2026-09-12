@@ -1,4 +1,4 @@
-import { Check, ChevronLeft, ChevronRight, List, Minus, Plus, X } from 'lucide-react'
+import { Check, ChevronLeft, ChevronRight, List, Minus, Play, Plus, Square, X } from 'lucide-react'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
@@ -26,6 +26,9 @@ export function WorkoutSessionScreen() {
   })
   const [rest, setRest] = useState<{ total: number; endsAt: number; label: string } | null>(null)
   const [restLeft, setRestLeft] = useState(0)
+  const [work, setWork] = useState<{ setId: string; setIndex: number; endsAt: number; total: number } | null>(null)
+  const [workLeft, setWorkLeft] = useState(0)
+  const workDoneRef = useRef<((setId: string, setIndex: number) => void) | null>(null)
   const [exitOpen, setExitOpen] = useState(false)
   const [listOpen, setListOpen] = useState(false)
   const elapsed = useElapsed(workout?.startedAt, workout?.status === 'in_progress')
@@ -51,6 +54,24 @@ export function WorkoutSessionScreen() {
     const t = setInterval(tick, 250)
     return () => clearInterval(t)
   }, [rest, prefs.restTimerSound])
+
+  // Work countdown for timed sets (planks, intervals, carries). Completes the set when it ends.
+  useEffect(() => {
+    if (!work) return
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((work.endsAt - Date.now()) / 1000))
+      setWorkLeft(left)
+      if (left === 0) {
+        setWork(null)
+        haptic([40, 60, 40])
+        if (prefs.restTimerSound) beep(audioRef)
+        workDoneRef.current?.(work.setId, work.setIndex)
+      }
+    }
+    tick()
+    const t = setInterval(tick, 250)
+    return () => clearInterval(t)
+  }, [work, prefs.restTimerSound])
 
   const totals = useMemo(() => {
     if (!workout) return { done: 0, total: 0 }
@@ -96,6 +117,17 @@ export function WorkoutSessionScreen() {
       setRest({ total: exercise.restSeconds, endsAt: Date.now() + exercise.restSeconds * 1000, label })
     }
     if (isLastSetOfExercise && next) setTimeout(() => setIdx((i) => Math.min(i + 1, workout.exercises.length - 1)), 350)
+  }
+
+  const startWork = (set: WorkoutSet, setIndex: number) => {
+    const total = set.actualSeconds ?? set.targetSeconds ?? 30
+    setRest(null)
+    setWork({ setId: set.id, setIndex, endsAt: Date.now() + total * 1000, total })
+    haptic(10)
+  }
+  workDoneRef.current = (setId, setIndex) => {
+    const s = exercise.sets.find((x) => x.id === setId)
+    if (s && !s.completed) completeSet(s, setIndex)
   }
 
   const adjust = (set: WorkoutSet, field: 'actualReps' | 'actualWeightKg' | 'actualSeconds', delta: number) => {
@@ -171,8 +203,20 @@ export function WorkoutSessionScreen() {
                     <span className="text-[14px] font-semibold tabular text-text-2">{si + 1}</span>
                     {timed ? (
                       <>
-                        <Counter value={`${seconds}s`} onMinus={() => adjust(s, 'actualSeconds', -1)} onPlus={() => adjust(s, 'actualSeconds', 1)} disabled={s.completed} />
-                        <span />
+                        <Counter value={`${seconds}s`} onMinus={() => adjust(s, 'actualSeconds', -1)} onPlus={() => adjust(s, 'actualSeconds', 1)} disabled={s.completed || work?.setId === s.id} />
+                        <div className="flex justify-center">
+                          {work?.setId === s.id ? (
+                            <button onClick={() => setWork(null)} className="h-9 px-3 rounded-full bg-accent text-accent-ink text-[13px] font-semibold tabular flex items-center gap-1.5">
+                              <Square size={11} fill="currentColor" /> {formatDuration(workLeft)}
+                            </button>
+                          ) : (
+                            !s.completed && (
+                              <button aria-label="Start timed set" onClick={() => startWork(s, si)} className="h-9 px-3 rounded-full bg-surface-2 text-text-2 hover:text-text text-[13px] font-medium flex items-center gap-1.5">
+                                <Play size={11} fill="currentColor" /> Go
+                              </button>
+                            )
+                          )}
+                        </div>
                       </>
                     ) : (
                       <>

@@ -1,4 +1,4 @@
-import { ArrowRight, Bell, Calendar, ChevronRight, Flame, Play, Sparkles, Utensils } from 'lucide-react'
+import { ArrowRight, Bell, Calendar, ChevronRight, Download, Flame, Play, Sparkles, Utensils, X } from 'lucide-react'
 import { motion } from 'motion/react'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -12,8 +12,9 @@ import { Card, SectionLabel } from '@/components/ui/Card'
 import { Chip } from '@/components/ui/Chip'
 import { CoachMark, ProgressBar, Ring } from '@/components/ui/Primitives'
 import { FOCUS_LABELS } from '@/domain/labels'
-import { addDays, dayKey, formatDate, fromDayKey, timeOfDayGreeting, todayKey, weekdayName } from '@/lib/dates'
+import { formatDate, fromDayKey, timeOfDayGreeting, todayKey, weekdayName } from '@/lib/dates'
 import { useNow } from '@/lib/hooks'
+import { useInstall } from '@/lib/install'
 import { cn, formatMinutes } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
 
@@ -311,8 +312,49 @@ export function HomeScreen() {
           </button>
         </section>
 
-        <div className="text-center text-[11px] text-text-4 pt-2">{dayKey(addDays(now, 0)) === today ? 'Sportly · Your Coach Daily' : ''}</div>
+        <InstallHint />
+        <div className="text-center text-[11px] text-text-4 pt-2">Sportly · Your Coach Daily</div>
       </div>
+    </div>
+  )
+}
+
+function InstallHint() {
+  const { canPrompt, standalone, ios, prompt } = useInstall()
+  const [dismissed, setDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('sportly.installHint') === '1'
+    } catch {
+      return false
+    }
+  })
+  if (standalone || dismissed || (!canPrompt && !ios)) return null
+  const dismiss = () => {
+    setDismissed(true)
+    try {
+      localStorage.setItem('sportly.installHint', '1')
+    } catch {
+      /* noop */
+    }
+  }
+  return (
+    <div className="rounded-[20px] border border-border bg-surface p-4 flex items-center gap-3">
+      <span className="h-10 w-10 rounded-full bg-accent-soft text-accent-text flex items-center justify-center shrink-0">
+        <Download size={18} />
+      </span>
+      <div className="flex-1 min-w-0">
+        <div className="text-[14.5px] font-semibold">Add Sportly to your home screen</div>
+        <div className="text-[12.5px] text-text-3">{canPrompt ? 'Full-screen, offline-ready, one tap away.' : 'Tap Share, then “Add to Home Screen”.'}</div>
+      </div>
+      {canPrompt ? (
+        <Button size="sm" variant="primary" onClick={() => prompt().then((ok) => ok && dismiss())}>
+          Install
+        </Button>
+      ) : (
+        <button aria-label="Dismiss" onClick={dismiss} className="h-8 w-8 rounded-full flex items-center justify-center text-text-3 hover:text-text">
+          <X size={16} />
+        </button>
+      )}
     </div>
   )
 }

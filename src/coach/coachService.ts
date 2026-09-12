@@ -363,6 +363,21 @@ export function runNotificationSweep(): void {
   const tw = selectTodayWorkout(s)
   const hour = now.getHours()
   const has = (kind: string, title?: string) => s.notifications.some((n) => n.kind === kind && diffDays(now, n.createdAt) === 0 && (!title || n.title === title))
+  // Mirror new in-app notifications to the device when the user allowed it.
+  const before = s.notifications.length
+  const mirror = () => {
+    const after = useStore.getState().notifications
+    const fresh = after.slice(0, Math.max(0, after.length - before))
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    for (const n of fresh) {
+      try {
+        new Notification(n.title, { body: n.body, icon: '/icons/icon-192.png', tag: n.id })
+      } catch {
+        /* not supported in this context */
+      }
+    }
+  }
+  queueMicrotask(mirror)
   const workouts = Object.values(s.workouts)
   const readiness = computeReadiness(s.checkIns[todayKey()], workouts, todayKey(), s.user.sleepHoursTypical)
 
