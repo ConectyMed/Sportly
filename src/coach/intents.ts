@@ -202,7 +202,7 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
   }
 
   // ---- Coach identity
-  const rename = t.match(/(?:call you|name you|your name is|rename you(?: to)?|be called)\s+([a-z][a-z'\-]{1,20})/i)
+  const rename = t.match(/(?:call you|name you|your name is|rename you(?: to)?|be called)\s+([a-z][a-z'-]{1,20})/i)
   if (rename) return { kind: 'rename_coach', name: capitalize(rename[1]) }
   if (/change your name|rename you|what should i call you/.test(t)) return { kind: 'rename_coach', name: '' }
 

@@ -235,10 +235,10 @@ export function buildDemoSeed(): SeedPayload {
       'coach',
       todayWorkout
         ? `Today is ${todayWorkout.title}: about ${todayWorkout.estimatedMinutes} min, ${todayWorkout.exercises.length} exercises. You are recovering well, so there is room to push the first two compounds.`
-        : 'Nothing is scheduled today. Want me to build something?',
+        : 'Today is a planned rest day: two sessions in the last 48 hours, and Monday is Upper Body. A walk and good food will do more than a session. If you want to move, I can build something light.',
       {
         cards: todayWorkout ? [{ id: uid('card'), type: 'workout', refId: todayWorkout.id, title: todayWorkout.title, subtitle: `${todayWorkout.estimatedMinutes} min · ${todayWorkout.exercises.length} exercises` }] : undefined,
-        suggestions: ['Start it', 'Make it shorter', 'What should I eat?'],
+        suggestions: todayWorkout ? ['Start it', 'Make it shorter', 'What should I eat?'] : ['Build today’s workout', 'Give me a light session', 'What should I eat?'],
       },
     ],
   ])
@@ -266,7 +266,7 @@ export function buildDemoSeed(): SeedPayload {
     { id: uid('ntf'), kind: 'plan_ready', title: 'Good morning. Your plan is ready.', body: todayWorkout ? `${todayWorkout.title}, about ${todayWorkout.estimatedMinutes} min.` : 'Tap to see today.', createdAt: new Date(now.getTime() - 3 * 3600_000).toISOString(), read: true, action: { label: 'See today', to: '/' } },
   ]
 
-  const nutrition = generateNutritionPlan({ user, goals, isTrainingDay: true, seed: `${today}-${userId}` })
+  const nutrition = generateNutritionPlan({ user, goals, isTrainingDay: Boolean(todayWorkout), seed: `${today}-${userId}` })
 
   void sessionIndex
   return {

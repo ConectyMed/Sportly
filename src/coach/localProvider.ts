@@ -417,7 +417,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       if (!trend.current) return { text: voice.compose({ core: 'I do not have enough weigh-ins to see a trend. Log your weight a few mornings a week and I will tell you exactly what is happening.' }), suggestions: ['Log my weight'] }
       const core = trend.stalled
         ? `Your weight has been flat for about three weeks at ${trend.current} kg. ${wantsGain ? 'For muscle gain that means intake has drifted to maintenance.' : wantsLoss ? 'For fat loss that usually means the deficit has closed, often through a little less daily movement and a little more food.' : 'That is a plateau, which is normal after an initial change.'}`
-        : `It is moving, just slowly: ${trend.change30 ?? 0 > 0 ? '+' : ''}${trend.change30} kg over the last month. Weekly noise hides that.`
+        : `It is moving, just slowly: ${(trend.change30 ?? 0) > 0 ? '+' : ''}${trend.change30} kg over the last month. Weekly noise hides that.`
       const fix = wantsGain ? 'Add about 150 kcal a day, mostly carbs around training, and hold it for two weeks.' : wantsLoss ? 'Trim 150–200 kcal or add 2,000 steps a day, and keep protein where it is. Weigh in the same way each morning.' : 'If you want it to move, tell me which way and I will adjust your targets.'
       return {
         text: voice.compose({ core, reason: fix, extra: 'Also check sleep: two weeks of short nights blunt both fat loss and muscle gain.', calm: 'Plateaus are normal, not failures.', push: 'Small change, then patience.', quip: 'The scale is a moody narrator. Trends are the story.' }),
