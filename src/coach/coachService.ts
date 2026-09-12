@@ -2,8 +2,11 @@ import type { Attachment, CalendarEvent, Conversation, Message, Workout, Workout
 import { GOAL_LABELS } from '@/domain/labels'
 import { addDays, dayKey, diffDays, formatShortDate, timeOfDayGreeting, todayKey } from '@/lib/dates'
 import { formatMinutes, sleep, uid } from '@/lib/utils'
+import { fileToDataUrl, loadAttachmentBlob } from '@/store/attachments'
+import { selectDailyNutrition } from '@/store/selectors'
 import { useStore, type AppState } from '@/store/useStore'
 import { AnthropicCoachProvider } from './anthropicProvider'
+import { AnthropicVisionFoodProvider, LocalFoodAnalysisProvider, type FoodAnalysis, type FoodAnalysisProvider } from './food/foodAnalysis'
 import { detectPRs, generateInsights } from './insights'
 import { LocalCoachProvider } from './localProvider'
 import { generateNutritionPlan } from './nutritionGenerator'
@@ -18,10 +21,46 @@ import { generateWorkout, workoutVolume } from './workoutGenerator'
  */
 
 const local = new LocalCoachProvider()
+const localFood = new LocalFoodAnalysisProvider()
+
+/** Tests flip this off so conversations run without the simulated thinking pause. */
+export const serviceOptions = { simulateThinking: true }
+
+function hasVisionKey(state: Pick<AppState, 'coach'>): boolean {
+  return state.coach.provider === 'anthropic' && Boolean(state.coach.anthropicApiKey)
+}
 
 function providerFor(state: AppState): CoachProvider {
-  if (state.coach.provider === 'anthropic' && state.coach.anthropicApiKey) return new AnthropicCoachProvider(state.coach.anthropicApiKey, state.coach.anthropicModel, local)
+  if (hasVisionKey(state)) return new AnthropicCoachProvider(state.coach.anthropicApiKey!, state.coach.anthropicModel, local)
   return local
+}
+
+function foodProviderFor(state: AppState): FoodAnalysisProvider {
+  if (hasVisionKey(state)) return new AnthropicVisionFoodProvider(state.coach.anthropicApiKey!, state.coach.anthropicModel, localFood)
+  return localFood
+}
+
+/**
+ * Analyse an attached food photo before the coach answers. With a vision-capable
+ * provider the image is genuinely interpreted; otherwise only the text is used and
+ * the result says so, so the coach never claims to have seen the plate.
+ */
+async function analyzeAttachedFood(state: AppState, text: string, attachments: Attachment[]): Promise<FoodAnalysis | undefined> {
+  const image = attachments.find((a) => a.kind === 'image')
+  if (!image) return undefined
+  const provider = foodProviderFor(state)
+  if (!provider.supportsImages) return provider.analyze({ text })
+  let base64: string | undefined
+  try {
+    const blob = await loadAttachmentBlob(image.id)
+    if (blob) {
+      const dataUrl = await fileToDataUrl(blob)
+      base64 = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    }
+  } catch (err) {
+    console.warn('[food] could not load attachment for analysis', err)
+  }
+  return provider.analyze({ text, image: { attachment: image, base64, mediaType: image.mimeType } })
 }
 
 export function selectTodayWorkout(state: Pick<AppState, 'workouts'>, date = todayKey()): Workout | undefined {
@@ -51,7 +90,10 @@ export function buildContext(state: AppState, conversation: Conversation): Coach
   const todayCheckIn = state.checkIns[today]
   const readiness = computeReadiness(todayCheckIn, workouts, today, user.sleepHoursTypical)
   const todayWorkout = selectTodayWorkout(state)
+  const tomorrow = dayKey(addDays(new Date(), 1))
+  const tomorrowWorkout = workouts.find((w) => w.scheduledFor === tomorrow && w.status === 'planned')
   const contextWorkout = conversation.context.lastWorkoutId ? state.workouts[conversation.context.lastWorkoutId] : undefined
+  const contextMeal = conversation.context.lastMealId ? state.meals[conversation.context.lastMealId] : undefined
   const targetPerWeek = user.availability.daysPerWeek
   return {
     now: new Date(),
@@ -62,9 +104,13 @@ export function buildContext(state: AppState, conversation: Conversation): Coach
     readiness,
     todayCheckIn,
     todayWorkout,
+    tomorrowWorkout,
     contextWorkout: contextWorkout ?? todayWorkout,
     activeProgram: selectActiveProgram(state),
     todayNutrition: selectTodayNutrition(state),
+    nutrition: selectDailyNutrition(state, today),
+    contextMeal,
+    foodVision: hasVisionKey(state),
     workouts,
     events: state.events,
     measurements: state.measurements,
@@ -101,6 +147,31 @@ export function applyActions(actions: CoachAction[] | undefined): void {
       case 'skip_workout':
         s.skipWorkout(a.workoutId)
         break
+      case 'complete_workout':
+        completeWorkoutFromChat(a.workoutId)
+        break
+      case 'remove_workout': {
+        const w = useStore.getState().workouts[a.workoutId]
+        if (w && w.status === 'planned') {
+          s.deleteWorkout(a.workoutId)
+          for (const e of useStore.getState().events.filter((e) => e.workoutId === a.workoutId)) s.removeEvent(e.id)
+        }
+        break
+      }
+      case 'log_meal':
+        s.upsertMeal(a.meal)
+        break
+      case 'update_meal':
+        s.upsertMeal(a.meal)
+        break
+      case 'delete_meal':
+        s.deleteMeal(a.mealId)
+        break
+      case 'update_availability': {
+        const user = useStore.getState().user
+        if (user) s.updateUser({ availability: { ...user.availability, ...a.patch } })
+        break
+      }
       case 'create_program': {
         if (a.replaceProgramId) {
           s.updateProgram(a.replaceProgramId, { status: 'cancelled' })
@@ -207,10 +278,12 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
     const ctx = buildContext(state, conv)
     const provider = providerFor(state)
     const started = Date.now()
-    const reply = await provider.respond({ text: trimmed, attachments, context: ctx })
+    if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, ctx.foodVision ? 'Looking at your photo' : 'Reading your message')
+    const foodAnalysis = await analyzeAttachedFood(state, trimmed, attachments)
+    const reply = await provider.respond({ text: trimmed, attachments, context: ctx, foodAnalysis })
     if (reply.status) useStore.getState().setCoachTyping(true, reply.status)
     // Make the coach feel like it thinks — briefly, and only for the local engine.
-    const think = provider.id === 'local' ? (reply.thinkMs ?? 800) : 0
+    const think = provider.id === 'local' && serviceOptions.simulateThinking ? (reply.thinkMs ?? 800) : 0
     const elapsed = Date.now() - started
     if (think > elapsed) await sleep(think - elapsed)
     applyActions(reply.actions)
@@ -307,10 +380,32 @@ export function ensureTodayNutrition() {
   return plan
 }
 
-export function finishWorkout(workoutId: string, feeling?: WorkoutSummary['feeling'], notes?: string): WorkoutSummary | undefined {
+/**
+ * "I just finished my workout" from the chat: tick the remaining sets and complete
+ * the session through the same path the workout screen uses, so streaks, calendar,
+ * progress and memory all update identically. The coach's reply is the chat turn itself.
+ */
+export function completeWorkoutFromChat(workoutId: string): WorkoutSummary | undefined {
+  const s = useStore.getState()
+  const w = s.workouts[workoutId]
+  if (!w || w.status === 'completed') return undefined
+  const ticked: Workout = {
+    ...w,
+    startedAt: w.startedAt ?? new Date(Date.now() - w.estimatedMinutes * 60_000).toISOString(),
+    exercises: w.exercises.map((e) => ({
+      ...e,
+      sets: e.sets.map((x) => (x.completed ? x : { ...x, completed: true, actualReps: x.actualReps ?? x.targetReps, actualWeightKg: x.actualWeightKg ?? x.targetWeightKg, actualSeconds: x.actualSeconds ?? x.targetSeconds })),
+    })),
+  }
+  s.upsertWorkout(ticked)
+  return finishWorkout(workoutId, undefined, undefined, { announce: false })
+}
+
+export function finishWorkout(workoutId: string, feeling?: WorkoutSummary['feeling'], notes?: string, opts: { announce?: boolean } = {}): WorkoutSummary | undefined {
   const s = useStore.getState()
   const w = s.workouts[workoutId]
   if (!w) return undefined
+  const announce = opts.announce ?? true
   const history = Object.values(s.workouts)
   const startedAt = w.startedAt ? new Date(w.startedAt).getTime() : Date.now() - w.estimatedMinutes * 60_000
   const durationSec = Math.max(60, Math.round((Date.now() - startedAt) / 1000))
@@ -329,7 +424,9 @@ export function finishWorkout(workoutId: string, feeling?: WorkoutSummary['feeli
     notes,
   }
   s.completeWorkout(workoutId, summary)
+  ensureEventForWorkout({ ...w, status: 'completed' })
   if (feeling) s.addMemory({ category: 'reaction', text: `${w.title} on ${formatShortDate(new Date())} felt ${feeling}${notes ? `: ${notes}` : ''}`, source: 'inferred' })
+  if (!announce) return summary
   // The coach acknowledges in the conversation.
   const voice = buildVoice(s.coach.personality)
   const ratio = setsPlanned ? setsCompleted / setsPlanned : 1
@@ -358,6 +455,8 @@ export function runNotificationSweep(): void {
   const key = `${todayKey()}-${now.getHours() < 12 ? 'am' : now.getHours() < 18 ? 'pm' : 'eve'}`
   if (s.lastNotificationSweep === key) return
   s.setNotificationSweep(key)
+  // Food scan drafts from earlier days were never confirmed: drop them.
+  s.pruneMealDrafts(todayKey())
 
   const voice = buildVoice(s.coach.personality)
   const tw = selectTodayWorkout(s)

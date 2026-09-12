@@ -74,6 +74,8 @@ export interface UserProfile {
   diet: DietPreference
   dietaryFlags: DietaryFlag[]
   dislikedFoods: string[]
+  /** Exercise ids or keywords the user has asked to avoid (persistent preference). */
+  dislikedExercises?: string[]
   lifestyle: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active'
   sleepHoursTypical: number
   createdAt: ISODate
@@ -151,6 +153,7 @@ export type CardType =
   | 'checkin'
   | 'attachment'
   | 'insight'
+  | 'food'
 
 export interface CoachCard {
   id: string
@@ -196,6 +199,9 @@ export type ExpectSlot =
   | 'bloodwork_flag'
   | 'equipment_list'
   | 'plan_choice'
+  | 'meal_slot'
+  | 'menu_options'
+  | 'finish_confirm'
 
 export interface Conversation {
   id: string
@@ -207,6 +213,10 @@ export interface Conversation {
     lastWorkoutId?: string
     lastProgramId?: string
     lastNutritionPlanId?: string
+    /** Meal currently being discussed (a food scan draft or a logged meal). */
+    lastMealId?: string
+    /** Last availability instruction, so “actually make it three” resolves. */
+    lastAvailabilityScope?: 'week' | 'always'
     lastGoalId?: string
     lastEventId?: string
     topic?: 'workout' | 'program' | 'nutrition' | 'progress' | 'goal' | 'calendar' | 'recovery' | 'general'
@@ -393,6 +403,55 @@ export interface NutritionPlan {
   rationale: string
   adjustments?: string[]
   createdAt: ISODate
+}
+
+/* ------------------------------------------------------------------ Food journal */
+
+export type FoodUnit = 'g' | 'ml' | 'piece' | 'serving' | 'cup' | 'tbsp' | 'slice'
+
+export interface FoodItem {
+  id: string
+  name: string
+  /** Quantity in `unit`; `grams` is the resolved weight used for macros. */
+  quantity: number
+  unit: FoodUnit
+  grams: number
+  calories: number
+  proteinG: number
+  carbsG: number
+  fatG: number
+  fiberG?: number
+  /** 0–1. Lower when the portion was guessed. */
+  confidence: number
+  /** Reference into the food database when matched. */
+  foodId?: string
+}
+
+export interface LoggedMeal {
+  id: string
+  date: DayKey
+  slot: Meal['slot']
+  name: string
+  items: FoodItem[]
+  calories: number
+  proteinG: number
+  carbsG: number
+  fatG: number
+  fiberG?: number
+  /** Overall estimate confidence, 0–1. */
+  confidence: number
+  notes?: string[]
+  source: 'scan' | 'text' | 'plan' | 'manual'
+  /** How the estimate was produced. Never claims vision when it was not used. */
+  analysis: 'local-estimate' | 'vision' | 'manual'
+  attachmentId?: string
+  previewDataUrl?: string
+  /** Draft = analysed but not yet committed to the day. */
+  status: 'draft' | 'logged'
+  /** Applied portion multiplier (“I only ate half” → 0.5). */
+  portionScale: number
+  createdAt: ISODate
+  updatedAt: ISODate
 }
 
 export type MeasurementType = 'body_weight' | 'body_fat' | 'waist' | 'sleep_hours' | 'steps' | 'energy' | 'soreness'

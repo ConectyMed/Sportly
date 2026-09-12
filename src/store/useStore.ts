@@ -9,6 +9,7 @@ import type {
   DailyCheckIn,
   DayKey,
   Goal,
+  LoggedMeal,
   Measurement,
   MemoryItem,
   Message,
@@ -72,6 +73,7 @@ export interface SeedPayload extends OnboardingPayload {
   workouts: Record<string, Workout>
   programs: Record<string, Program>
   nutritionPlans: Record<string, NutritionPlan>
+  meals?: Record<string, LoggedMeal>
   measurements: Measurement[]
   checkIns: Record<DayKey, DailyCheckIn>
   events: CalendarEvent[]
@@ -91,6 +93,8 @@ export interface AppState {
   workouts: Record<string, Workout>
   programs: Record<string, Program>
   nutritionPlans: Record<string, NutritionPlan>
+  /** Food journal: scanned, described or manually logged meals (drafts included). */
+  meals: Record<string, LoggedMeal>
   measurements: Measurement[]
   checkIns: Record<DayKey, DailyCheckIn>
   events: CalendarEvent[]
@@ -149,6 +153,13 @@ export interface AppState {
   // ---- nutrition
   upsertNutritionPlan: (plan: NutritionPlan) => void
 
+  // ---- food journal
+  upsertMeal: (meal: LoggedMeal) => void
+  updateMeal: (id: string, patch: Partial<LoggedMeal>) => void
+  deleteMeal: (id: string) => void
+  /** Drafts older than today are noise; drop them. */
+  pruneMealDrafts: (keepDate: DayKey) => void
+
   // ---- measurements & check-ins
   addMeasurement: (m: Omit<Measurement, 'id' | 'createdAt'>) => void
   removeMeasurement: (id: string) => void
@@ -188,6 +199,7 @@ const initialData = () => ({
   workouts: {} as Record<string, Workout>,
   programs: {} as Record<string, Program>,
   nutritionPlans: {} as Record<string, NutritionPlan>,
+  meals: {} as Record<string, LoggedMeal>,
   measurements: [] as Measurement[],
   checkIns: {} as Record<DayKey, DailyCheckIn>,
   events: [] as CalendarEvent[],
@@ -225,6 +237,7 @@ export const useStore = create<AppState>()(
           workouts: payload.workouts,
           programs: payload.programs,
           nutritionPlans: payload.nutritionPlans,
+          meals: payload.meals ?? {},
           measurements: payload.measurements,
           checkIns: payload.checkIns,
           events: payload.events,
@@ -390,6 +403,21 @@ export const useStore = create<AppState>()(
 
       upsertNutritionPlan: (plan) => set((s) => ({ nutritionPlans: { ...s.nutritionPlans, [plan.id]: plan } })),
 
+      upsertMeal: (meal) => set((s) => ({ meals: { ...s.meals, [meal.id]: meal } })),
+      updateMeal: (id, patch) =>
+        set((s) => (s.meals[id] ? { meals: { ...s.meals, [id]: { ...s.meals[id], ...patch, updatedAt: new Date().toISOString() } } } : {})),
+      deleteMeal: (id) =>
+        set((s) => {
+          const meals = { ...s.meals }
+          delete meals[id]
+          return { meals }
+        }),
+      pruneMealDrafts: (keepDate) =>
+        set((s) => {
+          const meals = Object.fromEntries(Object.entries(s.meals).filter(([, m]) => m.status === 'logged' || m.date === keepDate))
+          return Object.keys(meals).length === Object.keys(s.meals).length ? {} : { meals }
+        }),
+
       addMeasurement: (m) =>
         set((s) => ({
           measurements: [
@@ -472,7 +500,11 @@ export const useStore = create<AppState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 1,
+      version: 2,
+      migrate: (persisted) => {
+        const p = (persisted ?? {}) as Partial<AppState>
+        return { ...p, meals: p.meals ?? {} } as AppState
+      },
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => {
         const { ui: _ui, ...rest } = s
@@ -485,6 +517,7 @@ export const useStore = create<AppState>()(
         return {
           ...current,
           ...p,
+          meals: p.meals ?? {},
           coach: { ...DEFAULT_COACH, ...(p.coach ?? {}), personality: { ...DEFAULT_PERSONALITY, ...(p.coach?.personality ?? {}) } },
           preferences: {
             ...DEFAULT_PREFERENCES,

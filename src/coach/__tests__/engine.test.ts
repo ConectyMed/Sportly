@@ -10,6 +10,7 @@ import { generateNutritionPlan } from '@/coach/nutritionGenerator'
 import { generateInsights, consistencyStreak } from '@/coach/insights'
 import { buildVoice } from '@/coach/personality'
 import { todayKey } from '@/lib/dates'
+import { selectDailyNutrition } from '@/store/selectors'
 
 const seed = buildDemoSeed()
 
@@ -33,6 +34,9 @@ function ctx(overrides: Partial<CoachContext> = {}): CoachContext {
     contextWorkout: todayWorkout,
     activeProgram: undefined,
     todayNutrition: undefined,
+    nutrition: selectDailyNutrition({ meals: seed.meals ?? {}, nutritionPlans: seed.nutritionPlans ?? {}, workouts: Object.fromEntries(workouts.map((w) => [w.id, w])), user: seed.user, goals: seed.goals }),
+    contextMeal: undefined,
+    foodVision: false,
     workouts,
     events: seed.events,
     measurements: seed.measurements,
@@ -50,7 +54,8 @@ describe('demo seed', () => {
     const done = Object.values(seed.workouts).filter((w) => w.status === 'completed')
     expect(done.length).toBeGreaterThan(25)
     expect(seed.measurements.filter((m) => m.type === 'body_weight').length).toBeGreaterThan(30)
-    expect(seed.conversations.length).toBe(3)
+    expect(seed.conversations.length).toBe(4)
+    expect(Object.values(seed.meals ?? {}).filter((m) => m.status === 'logged').length).toBeGreaterThanOrEqual(5)
     expect(seed.memory.length).toBeGreaterThan(8)
   })
   it('produces insights', () => {
@@ -121,7 +126,8 @@ describe('generators', () => {
     const w = generateWorkout({ user: seed.user, goals: seed.goals, history: Object.values(seed.workouts), constraints: { minutes: 30, equipment: ['dumbbell'] } })
     expect(w.exercises.length).toBeGreaterThanOrEqual(3)
     expect(w.estimatedMinutes).toBeLessThanOrEqual(36)
-    expect(w.exercises.every((e) => e.sets.length >= 2)).toBe(true)
+    // Strength work always has ≥2 sets; a steady conditioning finisher may be a single timed block.
+    expect(w.exercises.every((e) => e.sets.length >= 2 || Boolean(e.sets[0]?.targetSeconds))).toBe(true)
   })
   it('shortens and restricts', () => {
     const w = generateWorkout({ user: seed.user, goals: seed.goals, history: Object.values(seed.workouts), constraints: { minutes: 60 } })

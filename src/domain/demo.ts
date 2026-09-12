@@ -1,9 +1,10 @@
 import { generateWorkout, workoutVolume } from '@/coach/workoutGenerator'
+import { analyzeDescription, buildMeal } from '@/coach/food/foodAnalysis'
 import { generateNutritionPlan } from '@/coach/nutritionGenerator'
 import type { SeedPayload } from '@/store/useStore'
 import { addDays, dayKey, startOfWeek, todayKey } from '@/lib/dates'
 import { hashString, round, uid } from '@/lib/utils'
-import type { AppNotification, CalendarEvent, Conversation, DailyCheckIn, Goal, Measurement, MemoryItem, Message, UserProfile, Workout } from './types'
+import type { AppNotification, CalendarEvent, Conversation, DailyCheckIn, Goal, LoggedMeal, Measurement, MemoryItem, Message, UserProfile, Workout } from './types'
 
 /**
  * Fictional demo user. Everything here is invented and generated deterministically
@@ -31,6 +32,7 @@ export function buildDemoSeed(): SeedPayload {
     diet: 'omnivore',
     dietaryFlags: [],
     dislikedFoods: ['Mushrooms'],
+    dislikedExercises: ['burpee'],
     lifestyle: 'moderate',
     sleepHoursTypical: 7,
     createdAt,
@@ -71,6 +73,8 @@ export function buildDemoSeed(): SeedPayload {
     mem('history', 'Ran an 8-week upper/lower block in spring; bench went from 70 to 80 kg', 55),
     mem('communication', 'Prefers short answers with one clear next step', 60),
     mem('habit', 'Climbs on Saturday afternoons; keep Saturday legs light', 20),
+    mem('preference', 'Never wants burpees in a session', 15),
+    mem('nutrition', 'Usual training-day breakfast is oats, banana and a whey shake', 12, 'inferred'),
   ]
 
   // ---- Training history: ~10 weeks, upper/lower, 4x/week with a few realistic misses.
@@ -206,6 +210,27 @@ export function buildDemoSeed(): SeedPayload {
   // Today's check-in: a good night.
   checkIns[today] = { date: today, sleepHours: 7.6, sleepQuality: 4, energy: 8, fatigue: 3, soreness: 3, mood: 'good', createdAt: now.toISOString() }
 
+  // ---- Food journal: meals are analysed from text like a real log, so totals are derived, never typed in.
+  const meals: Record<string, LoggedMeal> = {}
+  const logMeal = (daysAgo: number, hour: number, slot: LoggedMeal['slot'], description: string, opts: { source?: LoggedMeal['source']; id?: string } = {}) => {
+    const at = new Date(addDays(now, -daysAgo))
+    at.setHours(hour, 5 + (hashString(description) % 40), 0, 0)
+    if (at.getTime() > now.getTime()) return undefined
+    const meal = buildMeal(analyzeDescription(description), { date: dayKey(at), slot, source: opts.source ?? 'text', status: 'logged' })
+    meal.id = opts.id ?? `meal_demo_${daysAgo}_${slot}`
+    meal.createdAt = at.toISOString()
+    meal.updatedAt = at.toISOString()
+    meals[meal.id] = meal
+    return meal
+  }
+  logMeal(0, 7, 'breakfast', '80 g oats, a banana and a whey shake')
+  logMeal(0, 12, 'lunch', '200 g chicken breast, 180 g rice and broccoli')
+  logMeal(1, 7, 'breakfast', '3 eggs, 2 slices of toast and an apple')
+  logMeal(1, 13, 'lunch', 'salmon with 150 g rice and a salad')
+  logMeal(1, 16, 'snack', 'greek yogurt with a handful of almonds')
+  logMeal(1, 19, 'dinner', 'beef mince with pasta and tomato sauce')
+  const scannedMeal = logMeal(2, 13, 'lunch', 'chicken burrito bowl with rice, black beans and avocado', { source: 'scan', id: 'meal_demo_scan' })
+
   // ---- Conversations
   const conversations: Conversation[] = []
   const messages: Record<string, Message[]> = {}
@@ -243,6 +268,19 @@ export function buildDemoSeed(): SeedPayload {
     ],
   ])
 
+  if (scannedMeal) {
+    conv('Lunch scan', 2, { topic: 'nutrition', lastMealId: scannedMeal.id }, [
+      ['user', 'I ate this: chicken burrito bowl with rice, black beans and avocado'],
+      [
+        'coach',
+        `From your description I count: ${scannedMeal.items.map((i) => i.name.toLowerCase()).join(', ')}. Estimated ${scannedMeal.calories} kcal and ${scannedMeal.proteinG} g protein. Portion sizes are the main uncertainty, so correct anything before I add it.`,
+        { cards: [{ id: uid('card'), type: 'food', refId: scannedMeal.id, title: scannedMeal.name, subtitle: `${scannedMeal.calories} kcal · ${scannedMeal.proteinG} g protein` }], suggestions: ['There was more rice', 'Add it to lunch'] },
+      ],
+      ['user', 'Add it to lunch'],
+      ['coach', `Added to lunch: ${scannedMeal.name}. That leaves plenty of room for a protein-forward dinner.`, { suggestions: ['What should I eat tonight?', 'How much protein do I have left?'] }],
+    ])
+  }
+
   conv('Restaurant tonight', 6, { topic: 'nutrition' }, [
     ['user', 'I’m eating at a restaurant tonight'],
     ['coach', 'No problem. I adjusted the rest of your day around it: lighter, protein-forward meals earlier so dinner has room. Order a protein main, add vegetables, and pick one indulgence you actually want.', { suggestions: ['What should I order?'] }],
@@ -279,6 +317,7 @@ export function buildDemoSeed(): SeedPayload {
     workouts,
     programs: {},
     nutritionPlans: { [nutrition.id]: nutrition },
+    meals,
     measurements,
     checkIns,
     events,

@@ -8,6 +8,7 @@ import { useStore } from '@/store/useStore'
 import { Button } from '@/components/ui/Button'
 import { Tag } from '@/components/ui/Chip'
 import { MEAL_SLOT_LABELS } from '@/domain/labels'
+import { FoodCardView } from './FoodCard'
 
 interface CardProps {
   card: CoachCard
@@ -34,6 +35,8 @@ export function CoachCardView({ card, onSend }: CardProps) {
       return <MemoryCardView card={card} />
     case 'attachment':
       return <AttachmentCardView card={card} />
+    case 'food':
+      return <FoodCardView card={card} onSend={onSend} />
     default:
       return null
   }

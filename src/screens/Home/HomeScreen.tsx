@@ -16,6 +16,7 @@ import { formatDate, fromDayKey, timeOfDayGreeting, todayKey, weekdayName } from
 import { useNow } from '@/lib/hooks'
 import { useInstall } from '@/lib/install'
 import { cn, formatMinutes } from '@/lib/utils'
+import { selectDailyNutrition } from '@/store/selectors'
 import { useStore } from '@/store/useStore'
 
 export function HomeScreen() {
@@ -33,6 +34,9 @@ export function HomeScreen() {
   const startWorkout = useStore((s) => s.startWorkout)
   const todayWorkout = useStore((s) => selectTodayWorkout(s))
   const nutrition = useStore((s) => selectTodayNutrition(s))
+  const meals = useStore((s) => s.meals)
+  const nutritionPlans = useStore((s) => s.nutritionPlans)
+  const daily = useMemo(() => selectDailyNutrition({ meals, nutritionPlans, workouts: workoutsMap, user, goals }), [meals, nutritionPlans, workoutsMap, user, goals])
   const program = useStore((s) => selectActiveProgram(s))
   const [checkStep, setCheckStep] = useState<'sleep' | 'energy' | 'done'>('sleep')
 
@@ -296,7 +300,13 @@ export function HomeScreen() {
             </span>
             <div className="flex-1 min-w-0">
               <div className="text-[15px] font-semibold">Nutrition</div>
-              <div className="text-[12.5px] text-text-3 truncate">{nutrition ? `${nutrition.calories.toLocaleString()} kcal · ${nutrition.proteinG} g protein · ${nutrition.meals.length} meals` : 'Today’s targets and meals'}</div>
+              <div className="text-[12.5px] text-text-3 truncate" data-testid="home-nutrition-line">
+                {daily.meals.length
+                  ? `${daily.consumed.calories.toLocaleString()} of ${daily.targets.calories.toLocaleString()} kcal · ${Math.max(0, daily.remaining.proteinG)} g protein left · ${daily.meals.length} ${daily.meals.length === 1 ? 'meal' : 'meals'} logged`
+                  : nutrition
+                    ? `${nutrition.calories.toLocaleString()} kcal · ${nutrition.proteinG} g protein · nothing logged yet`
+                    : 'Today’s targets and meals'}
+              </div>
             </div>
             <ChevronRight size={16} className="text-text-4" />
           </button>

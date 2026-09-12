@@ -1,10 +1,12 @@
 import { EQUIPMENT_LABELS, getExercise } from '@/domain/exercises'
 import { FOCUS_LABELS, GOAL_LABELS } from '@/domain/labels'
-import type { CoachCard, Goal, MemoryItem, Workout } from '@/domain/types'
+import type { CoachCard, Goal, LoggedMeal, Meal, MemoryItem, Workout } from '@/domain/types'
+import { analyzeDescription, applyCorrection, buildMeal, confidenceLabel, slotForTime, totalsOf, type FoodAnalysis } from './food/foodAnalysis'
+import { computeTargets } from './nutritionGenerator'
 import { addDays, dayKey, formatShortDate, fromDayKey, nextWeekday, timeOfDayGreeting, todayKey, weekdayName } from '@/lib/dates'
 import { clamp, formatMinutes, plural, round, uid } from '@/lib/utils'
 import { consistencyStreak, personalRecords, weeklyStats, weightTrend } from './insights'
-import { parseIntent, type Intent, type WorkoutChange } from './intents'
+import { parseIntent, parseSlot, type Intent, type WorkoutChange } from './intents'
 import { generateNutritionPlan } from './nutritionGenerator'
 import { buildVoice, type Voice } from './personality'
 import { generateProgram, materializeProgram, programWeekFor } from './programGenerator'
@@ -28,6 +30,8 @@ export class LocalCoachProvider implements CoachProvider {
       topic: ctx.conversation.context.topic,
       hasAttachments: req.attachments.length > 0,
       hasWorkout: Boolean(ctx.contextWorkout && ctx.contextWorkout.status !== 'completed'),
+      hasMeal: Boolean(ctx.contextMeal),
+      lastAvailabilityScope: ctx.conversation.context.lastAvailabilityScope,
     })
     const voice = buildVoice(ctx.coach.personality)
     return respond(intent, req, ctx, voice)
@@ -356,14 +360,31 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       const plan = ctx.todayNutrition ?? generateNutritionPlan({ user: ctx.user, goals: ctx.goals, isTrainingDay, lowerCarb: intent.lowerCarb, seed: `${today}-${ctx.user.id}-${intent.lowerCarb ? 'lc' : ''}` })
       const actions: CoachAction[] = ctx.todayNutrition && !intent.lowerCarb ? [] : [{ type: 'create_nutrition_plan', plan }]
       const meal = intent.slot ? plan.meals.find((m) => m.slot === intent.slot) : undefined
-      const core = meal
-        ? `${capitalize(intent.slot!)}: ${meal.name}. ${meal.items.join(', ')}. About ${meal.calories} kcal with ${meal.proteinG} g protein.`
-        : `Today${isTrainingDay ? ' is a training day' : ' is a rest day'}: ${plan.calories.toLocaleString()} kcal, ${plan.proteinG} g protein, ${plan.carbsG} g carbs, ${plan.fatG} g fat. ${plan.meals.length} meals, all in your plan.`
+      const n = ctx.nutrition
+      const eaten = n.consumed.calories > 0
+      let core: string
+      let reason: string | undefined = plan.rationale
+      if (meal && eaten) {
+        // Size the suggestion to what is actually left today.
+        const left = Math.max(0, n.remaining.calories)
+        const leftP = Math.max(0, n.remaining.proteinG)
+        const scale = left > 0 ? Math.min(1.4, Math.max(0.5, left / Math.max(1, meal.calories))) : 0.5
+        const kcal = Math.round((meal.calories * scale) / 10) * 10
+        const prot = Math.round(meal.proteinG * scale)
+        core = `You’ve had ${n.consumed.calories.toLocaleString()} kcal and ${n.consumed.proteinG} g protein so far, so about ${left.toLocaleString()} kcal and ${leftP} g protein are left. ${capitalize(intent.slot!)}: ${meal.name} (${meal.items.join(', ')}), sized to roughly ${kcal} kcal and ${prot} g protein.`
+        reason = leftP > 40 ? 'Protein is the priority for this one; the rest can be simple.' : leftP <= 10 ? 'Protein is already covered, so keep this one light and enjoyable.' : 'That closes the day neatly without forcing another big meal.'
+      } else if (meal) {
+        core = `${capitalize(intent.slot!)}: ${meal.name}. ${meal.items.join(', ')}. About ${meal.calories} kcal with ${meal.proteinG} g protein.`
+      } else if (eaten) {
+        core = `Today${isTrainingDay ? ' is a training day' : ' is a rest day'}: target ${plan.calories.toLocaleString()} kcal and ${plan.proteinG} g protein. You’ve logged ${n.consumed.calories.toLocaleString()} kcal and ${n.consumed.proteinG} g protein across ${plural(n.meals.length, 'meal')}, so ${Math.max(0, n.remaining.calories).toLocaleString()} kcal and ${Math.max(0, n.remaining.proteinG)} g protein remain.`
+      } else {
+        core = `Today${isTrainingDay ? ' is a training day' : ' is a rest day'}: ${plan.calories.toLocaleString()} kcal, ${plan.proteinG} g protein, ${plan.carbsG} g carbs, ${plan.fatG} g fat. ${plan.meals.length} meals, all in your plan.`
+      }
       return {
-        text: voice.compose({ core, reason: plan.rationale, extra: 'Swap any meal for something with similar protein and it still works.', calm: 'Eat well, no stress.', push: 'Fuel matches the work.', quip: 'Protein first. Everything else is negotiable.' }),
+        text: voice.compose({ core, reason, extra: 'Swap any meal for something with similar protein and it still works.', calm: 'Eat well, no stress.', push: 'Fuel matches the work.', quip: 'Protein first. Everything else is negotiable.' }),
         cards: [{ id: uid('card'), type: 'nutrition', refId: plan.id, title: 'Today’s nutrition', subtitle: `${plan.calories.toLocaleString()} kcal · ${plan.proteinG} g protein` }],
         actions,
-        suggestions: ['I’m eating at a restaurant tonight', 'Make it lower carb', 'What’s for dinner?'],
+        suggestions: eaten ? ['What have I eaten today?', 'I’m eating at a restaurant tonight', 'Log a meal'] : ['I’m eating at a restaurant tonight', 'Make it lower carb', 'What’s for dinner?'],
         contextPatch: { lastNutritionPlanId: plan.id, topic: 'nutrition' },
         status: 'Planning your meals',
         thinkMs: 1100,
@@ -384,7 +405,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         }),
         cards: [{ id: uid('card'), type: 'nutrition', refId: plan.id, title: 'Adjusted for tonight', subtitle: `${plan.calories.toLocaleString()} kcal · restaurant dinner` }],
         actions: [{ type: 'create_nutrition_plan', plan }, { type: 'remember', item: { category: 'habit', text: `Ate out on ${weekdayName(ctx.now)} (${formatShortDate(ctx.now)})`, source: 'conversation' } }],
-        suggestions: ['What should I order?', 'Plan tomorrow’s meals'],
+        suggestions: ['What would you choose?', 'What should I order?', 'Plan tomorrow’s meals'],
         contextPatch: { lastNutritionPlanId: plan.id, topic: 'nutrition' },
         status: 'Adjusting your day',
         thinkMs: 1100,
@@ -633,7 +654,15 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       }
       if (kinds.has('image')) {
         const lowered = userText.toLowerCase()
-        if (/meal|food|ate|plate|lunch|dinner|breakfast/.test(lowered)) return respond({ kind: 'attachment_context', what: 'meal' }, req, ctx, voice)
+        const foodish = /meal|food|ate|eat|plate|lunch|dinner|breakfast|snack|calories|protein|menu|restaurant/.test(lowered)
+        const fa = req.foodAnalysis
+        // A real vision model recognised food (or a menu) in the photo.
+        if (fa && fa.analysis === 'vision' && fa.items.length) return foodDraftReply(fa, req, ctx, voice, parseSlot(lowered))
+        if (fa && fa.analysis === 'vision' && /menu/.test(fa.name.toLowerCase())) return respond({ kind: 'menu_help' }, req, ctx, voice)
+        // Local engine: the text may describe the plate well enough to estimate now.
+        if (fa && fa.items.length) return foodDraftReply(fa, req, ctx, voice, parseSlot(lowered))
+        if (/menu/.test(lowered)) return respond({ kind: 'menu_help' }, req, ctx, voice)
+        if (foodish) return respond({ kind: 'attachment_context', what: 'meal' }, req, ctx, voice)
         if (/gym|equipment/.test(lowered)) return respond({ kind: 'attachment_context', what: 'equipment' }, req, ctx, voice)
         if (/progress|physique|body/.test(lowered)) return respond({ kind: 'attachment_context', what: 'progress_photo' }, req, ctx, voice)
         if (/plan|program|routine/.test(lowered)) return respond({ kind: 'attachment_context', what: 'plan' }, req, ctx, voice)
@@ -667,10 +696,14 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       const remember = (text: string, category: MemoryItem['category']): CoachAction => ({ type: 'remember', item: { category, text, source: 'conversation' } })
       switch (intent.what) {
         case 'meal': {
-          const plan = ctx.todayNutrition
           return {
-            text: voice.compose({ core: `Thanks. I have logged it against today${plan ? ` (${plan.calories.toLocaleString()} kcal target)` : ''}. Give me a rough description of what was on the plate and I will estimate protein and calories and adjust the rest of your day.`, reason: 'Estimates from a description are usually within 15%, which is plenty for this.', quip: 'Camera eats first. Coach estimates second.' }),
-            actions: [remember(`Shared a meal photo on ${formatShortDate(ctx.now)}`, 'nutrition')],
+            text: voice.compose({
+              core: ctx.foodVision
+                ? 'I could not make out the food in that photo. Tell me what is on the plate and roughly how much, and I will estimate it.'
+                : 'I can’t see photos on this device yet, so I won’t pretend to. Tell me what’s on the plate and roughly how much, and I’ll estimate calories and protein from that.',
+              reason: 'A short description is usually within 15% of the real thing, which is plenty for coaching.',
+              quip: 'Camera eats first. Coach estimates second.',
+            }),
             suggestions: ['Chicken, rice and veg', 'Pasta with salmon', 'A big salad'],
             expects: 'meal_description',
             contextPatch: { topic: 'nutrition' },
@@ -747,14 +780,11 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
     }
 
     case 'meal_description': {
-      const est = estimateMeal(intent.text)
-      return {
-        text: voice.compose({ core: `Roughly ${est.kcal} kcal with about ${est.protein} g protein. ${ctx.todayNutrition ? `That leaves around ${Math.max(0, ctx.todayNutrition.calories - est.kcal).toLocaleString()} kcal for the rest of today.` : 'Logged against today.'}`, reason: est.note, calm: 'Good enough is the goal.', push: 'Protein handled. Keep going.' }),
-        actions: [{ type: 'remember', item: { category: 'nutrition', text: `Ate ${intent.text.toLowerCase()} on ${formatShortDate(ctx.now)} (~${est.kcal} kcal)`, source: 'conversation' } }],
-        suggestions: ['What should I eat tonight?', 'Analyze my progress'],
-        contextPatch: { topic: 'nutrition' },
-        thinkMs: 800,
+      const analysis = analyzeDescription(intent.text)
+      if (analysis.needsDescription) {
+        return { text: voice.compose({ core: analysis.notes[0] ?? 'Name the main parts of the meal and I will estimate it.', soft: 'Almost there:' }), suggestions: ['Chicken, rice and veg', 'Eggs and toast', 'Salmon and potatoes'], expects: 'meal_description', contextPatch: { topic: 'nutrition' } }
       }
+      return foodDraftReply(analysis, req, ctx, voice, parseSlot(intent.text))
     }
 
     case 'bloodwork_flag': {
@@ -799,6 +829,349 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         status: 'Building your program',
         thinkMs: 1800,
       }
+    }
+
+    case 'food_log': {
+      const analysis = req.foodAnalysis && req.foodAnalysis.items.length ? req.foodAnalysis : analyzeDescription(intent.text)
+      if (analysis.needsDescription || !analysis.items.length) {
+        return {
+          text: voice.compose({ core: analysis.notes[0] ?? 'Tell me what was in it and roughly how much, and I will estimate it.', soft: 'One thing:' }),
+          suggestions: ['Chicken, rice and veg', 'Eggs and toast', 'Salmon and potatoes'],
+          expects: 'meal_description',
+          contextPatch: { topic: 'nutrition' },
+        }
+      }
+      const image = imageFromRequest(req, ctx)
+      if (image) return foodDraftReply(analysis, req, ctx, voice, intent.slot)
+      // Plain text: log it straight away (easily corrected or removed).
+      const slot = intent.slot ?? slotForTime(ctx.now)
+      const meal = buildMeal(analysis, { date: today, slot, source: 'text', status: 'logged' })
+      return {
+        text: voice.compose({
+          core: `Logged as ${slotLabel(slot)}: ${meal.name}, about ${meal.calories} kcal, ${meal.proteinG} g protein, ${meal.carbsG} g carbs, ${meal.fatG} g fat. ${intakeLine(ctx, meal)}`,
+          reason: analysis.notes[0],
+          extra: 'Say “there was more rice”, “I only ate half” or “remove the sauce” and I will adjust it.',
+          calm: 'Good, that is tracked.',
+          push: 'Fuel logged. Keep stacking good decisions.',
+          quip: 'Your macros have been notified.',
+        }),
+        cards: [foodCard(meal)],
+        actions: [{ type: 'log_meal', meal }],
+        suggestions: ['What should I eat tonight?', 'How much protein do I have left?', 'I only ate half'],
+        contextPatch: { lastMealId: meal.id, topic: 'nutrition' },
+        status: 'Estimating your meal',
+        thinkMs: 900,
+      }
+    }
+
+    case 'meal_correction': {
+      const meal = ctx.contextMeal
+      if (!meal) return { text: voice.compose({ core: 'Which meal do you mean? Log one first or tell me what you ate and I will adjust from there.' }), suggestions: ['What have I eaten today?', 'Log a meal'] }
+      let current = meal
+      const applied: string[] = []
+      const failed: string[] = []
+      for (const c of intent.corrections) {
+        const r = applyCorrection(current, c)
+        if (r.applied) {
+          current = r.meal
+          applied.push(r.summary)
+        } else failed.push(r.summary)
+      }
+      if (!applied.length) {
+        return {
+          text: voice.compose({ core: `${failed[0] ?? 'I could not apply that.'} This meal has ${current.items.map((i) => i.name.toLowerCase()).join(', ')}.`, soft: 'Hmm,' }),
+          cards: [foodCard(current)],
+          suggestions: current.items.slice(0, 3).map((i) => `Remove the ${i.name.toLowerCase()}`),
+          contextPatch: { lastMealId: current.id, topic: 'nutrition' },
+        }
+      }
+      const isDraft = current.status === 'draft'
+      return {
+        text: voice.compose({
+          core: `${applied.join(' ')} Now about ${current.calories} kcal and ${current.proteinG} g protein.${failed.length ? ` ${failed.join(' ')}` : ''}${isDraft ? '' : ` ${intakeLine(ctx, current, meal)}`}`,
+          extra: isDraft ? `Say “add it to ${slotLabel(current.slot)}” when it looks right.` : undefined,
+          calm: 'Updated.',
+          push: 'Updated. Precision pays.',
+        }),
+        cards: [foodCard(current)],
+        actions: [{ type: 'update_meal', meal: current }],
+        suggestions: isDraft ? [`Add it to ${slotLabel(current.slot)}`, 'I only ate half', 'This was dinner'] : ['What should I eat tonight?', 'How much protein do I have left?'],
+        contextPatch: { lastMealId: current.id, topic: 'nutrition' },
+        thinkMs: 600,
+      }
+    }
+
+    case 'meal_commit': {
+      const meal = ctx.contextMeal
+      if (!meal) return { text: voice.compose({ core: 'There is nothing waiting to be logged. Send a photo or tell me what you ate.' }), suggestions: ['I ate chicken, rice and veg', 'What have I eaten today?'] }
+      const slot = intent.slot ?? meal.slot
+      if (meal.status === 'logged' && slot === meal.slot) {
+        return { text: voice.compose({ core: `That one is already in your ${slotLabel(slot)}. ${intakeLine(ctx)}` }), cards: [foodCard(meal)], suggestions: ['What should I eat tonight?', 'Remove that meal'], contextPatch: { lastMealId: meal.id, topic: 'nutrition' } }
+      }
+      const logged: LoggedMeal = { ...meal, slot, status: 'logged', updatedAt: new Date().toISOString() }
+      return {
+        text: voice.compose({
+          core: `Added to ${slotLabel(slot)}: ${logged.name}, ${logged.calories} kcal and ${logged.proteinG} g protein. ${intakeLine(ctx, logged, meal.status === 'logged' ? meal : undefined)}`,
+          calm: 'Tracked.',
+          push: 'Logged. Keep the day honest.',
+        }),
+        cards: [foodCard(logged)],
+        actions: [{ type: 'update_meal', meal: logged }],
+        suggestions: ['What should I eat tonight?', 'How much protein do I have left?', 'What have I eaten today?'],
+        contextPatch: { lastMealId: logged.id, topic: 'nutrition' },
+        thinkMs: 500,
+      }
+    }
+
+    case 'meal_discard': {
+      const meal = ctx.contextMeal
+      if (!meal) return { text: voice.compose({ core: 'Nothing to remove right now.' }), suggestions: ['What have I eaten today?'] }
+      return {
+        text: voice.compose({ core: meal.status === 'logged' ? `Removed ${meal.name.toLowerCase()} from your ${slotLabel(meal.slot)}.` : 'Discarded that estimate. Nothing was logged.', calm: 'Done.', push: 'Gone.' }),
+        actions: [{ type: 'delete_meal', mealId: meal.id }],
+        suggestions: ['What have I eaten today?', 'Log a meal'],
+        contextPatch: { lastMealId: undefined, topic: 'nutrition' },
+        thinkMs: 400,
+      }
+    }
+
+    case 'eaten_today': {
+      const n = ctx.nutrition
+      if (!n.meals.length) return { text: voice.compose({ core: 'Nothing logged yet today. Send me a photo of a meal or tell me what you ate and I will keep the tally.', soft: 'Clean slate:' }), suggestions: ['I ate eggs and toast', 'What should I eat?'], contextPatch: { topic: 'nutrition' } }
+      const lines = n.meals.map((m) => `• ${slotLabel(m.slot)}: ${m.name} (${m.calories} kcal, ${m.proteinG} g protein)`).join('\n')
+      return {
+        text: voice.compose({ core: `So far today:\n${lines}\n\nTotal ${n.consumed.calories.toLocaleString()} kcal, ${n.consumed.proteinG} g protein, ${n.consumed.carbsG} g carbs, ${n.consumed.fatG} g fat. ${intakeLine(ctx)}`, quip: 'I count everything. Lovingly.' }),
+        cards: n.meals.slice(-1).map(foodCard),
+        suggestions: ['What should I eat tonight?', 'How much protein do I have left?', 'Log a meal'],
+        contextPatch: { lastMealId: n.meals[n.meals.length - 1].id, topic: 'nutrition' },
+        thinkMs: 500,
+      }
+    }
+
+    case 'remaining_nutrition': {
+      const n = ctx.nutrition
+      const r = n.remaining
+      const m = intent.macro
+      const core =
+        m === 'protein'
+          ? `${Math.max(0, r.proteinG)} g of protein left out of ${n.targets.proteinG} g${r.proteinG <= 0 ? ', so you are already there' : ''}.`
+          : m === 'calories'
+            ? `${Math.max(0, r.calories).toLocaleString()} kcal left out of ${n.targets.calories.toLocaleString()}${r.calories < 0 ? `, so you are about ${Math.abs(r.calories)} over` : ''}.`
+            : m === 'carbs'
+              ? `${Math.max(0, r.carbsG)} g of carbs left out of ${n.targets.carbsG} g.`
+              : m === 'fat'
+                ? `${Math.max(0, r.fatG)} g of fat left out of ${n.targets.fatG} g.`
+                : `Left for today: ${Math.max(0, r.calories).toLocaleString()} kcal, ${Math.max(0, r.proteinG)} g protein, ${Math.max(0, r.carbsG)} g carbs, ${Math.max(0, r.fatG)} g fat. You have logged ${plural(n.meals.length, 'meal')}.`
+      const advice = r.proteinG > 40 ? 'Make the next meal protein-forward and that closes it.' : r.proteinG <= 10 ? 'Protein is handled; the rest of the day can be relaxed.' : 'One normal meal covers it.'
+      return {
+        text: voice.compose({ core, reason: n.meals.length ? advice : 'Nothing is logged yet, so that is the full daily target.', calm: 'Easy.', push: 'Go hit it.' }),
+        suggestions: ['What should I eat tonight?', 'What have I eaten today?', 'Log a meal'],
+        contextPatch: { topic: 'nutrition' },
+        thinkMs: 400,
+      }
+    }
+
+    case 'menu_help': {
+      const n = ctx.nutrition
+      if (!intent.options?.length) {
+        return {
+          text: voice.compose({
+            core: ctx.foodVision ? 'Tell me the two to four dishes you are torn between and I will pick for your day.' : 'I can’t read menu photos on this device yet, so tell me the two to four dishes you are considering and I will pick the best fit for today.',
+            reason: `You have about ${Math.max(0, n.remaining.calories).toLocaleString()} kcal and ${Math.max(0, n.remaining.proteinG)} g protein left, which is what I will judge against.`,
+            soft: 'No stress,',
+          }),
+          suggestions: ['Grilled salmon, chicken pasta or a burger', 'Steak and fries or a poke bowl'],
+          expects: 'menu_options',
+          contextPatch: { topic: 'nutrition' },
+        }
+      }
+      const ranked = intent.options
+        .map((o) => {
+          const a = analyzeDescription(o)
+          const t = totalsOf(a.items)
+          const proteinScore = Math.min(1, t.proteinG / Math.max(20, Math.min(60, n.remaining.proteinG)))
+          const calorieFit = n.remaining.calories > 0 ? 1 - Math.min(1, Math.abs(t.calories - n.remaining.calories * 0.8) / Math.max(400, n.remaining.calories)) : t.calories < 600 ? 0.8 : 0.3
+          const goalBias = goal === 'lose_fat' ? (t.calories > 800 ? -0.3 : 0.1) : goal === 'build_muscle' ? (t.proteinG >= 35 ? 0.2 : -0.1) : 0
+          return { name: o, t, score: a.items.length ? proteinScore * 0.6 + calorieFit * 0.4 + goalBias : 0.2 }
+        })
+        .sort((a, b) => b.score - a.score)
+      const best = ranked[0]
+      const others = ranked.slice(1)
+      return {
+        text: voice.compose({
+          core: `I would go with the ${best.name}: roughly ${best.t.calories} kcal and ${best.t.proteinG} g protein${others.length ? `, versus ${others.map((o) => `${o.name} (~${o.t.calories} kcal, ${o.t.proteinG} g protein)`).join(' and ')}` : ''}. It fits the ${Math.max(0, n.remaining.calories).toLocaleString()} kcal and ${Math.max(0, n.remaining.proteinG)} g protein you have left.`,
+          reason: goal === 'lose_fat' ? 'Protein keeps you full and the calories stay honest.' : goal === 'build_muscle' ? 'Protein first, then enjoy the rest.' : 'Balanced and satisfying.',
+          extra: 'Rough restaurant estimates, so treat them as a guide.',
+          quip: 'Ordering is a skill. You just levelled up.',
+        }),
+        suggestions: [`I ate the ${best.name}`, 'What have I eaten today?'],
+        contextPatch: { topic: 'nutrition' },
+        thinkMs: 900,
+      }
+    }
+
+    case 'availability': {
+      const a = ctx.user.availability
+      let days = intent.days
+      const count = intent.count ?? days?.length ?? a.daysPerWeek
+      if (!days) {
+        // Pick from preferred days first, then sensible defaults, until we have `count`.
+        const defaults = [1, 3, 5, 2, 4, 6, 0]
+        days = [...a.preferredDays]
+        for (const d of defaults) if (days.length < count && !days.includes(d)) days.push(d)
+        days = days.slice(0, count).sort((x, y) => ((x + 6) % 7) - ((y + 6) % 7))
+      }
+      const names = days.map((d) => WEEKDAY_NAMES_SHORT[d]).join(', ')
+      if (intent.scope === 'always') {
+        return {
+          text: voice.compose({ core: `Got it: ${names}, ${plural(days.length, 'day')} a week from now on. Your schedule and future plans follow that.`, reason: ctx.activeProgram ? `${ctx.activeProgram.name} was built for ${ctx.activeProgram.daysPerWeek} days; say “rebuild my program” and I will refit it.` : 'I will slot sessions on those days and adapt if a week changes.', calm: 'Set.', push: 'Locked in.' }),
+          actions: [
+            { type: 'update_availability', patch: { preferredDays: days, daysPerWeek: days.length } },
+            { type: 'remember', item: { category: 'availability', text: `Trains ${plural(days.length, 'day')} a week: ${names}`, source: 'conversation' } },
+          ],
+          suggestions: ['Plan my week', ctx.activeProgram ? 'Rebuild my program' : 'Create a 12-week program'],
+          contextPatch: { lastAvailabilityScope: 'always', topic: 'calendar' },
+          thinkMs: 500,
+        }
+      }
+      // This week only: plan sessions on the chosen days without touching the persistent schedule.
+      const week = weekPlanEvents(ctx, days, count)
+      const keep = new Set(week.map((e) => e.workout.id))
+      const windowEnd = dayKey(addDays(ctx.now, 6))
+      // A shrinking plan (“actually make it three”) drops the coach-planned sessions that are no longer wanted.
+      const dropped = ctx.workouts.filter((w) => w.status === 'planned' && !w.programId && w.scheduledFor >= today && w.scheduledFor <= windowEnd && !keep.has(w.id))
+      const crossesWeek = week.some((e) => fromDayKey(e.date).getDay() === 1 && e.date > today)
+      return {
+        text: voice.compose({ core: `${crossesWeek ? 'Your next seven days' : 'This week'}: ${week.map((e) => `${weekdayName(fromDayKey(e.date), true)} ${e.title}`).join(' · ')}. ${plural(week.length, 'session')} on your calendar${dropped.length ? `, ${plural(dropped.length, 'session')} removed` : ''}, just for this week.`, reason: 'Your usual schedule stays as it is.', calm: 'Flexible weeks are fine.', push: 'Three good sessions beat five rushed ones.' }),
+        cards: [{ id: uid('card'), type: 'calendar', title: crossesWeek ? 'Next seven days' : 'This week', subtitle: `${plural(week.length, 'session')} planned`, data: { days: week.map((e) => ({ date: e.date, title: e.title })) } }],
+        actions: [...dropped.map((w) => ({ type: 'remove_workout', workoutId: w.id }) as CoachAction), ...week.map((e) => ({ type: 'create_workout', workout: e.workout }) as CoachAction)],
+        suggestions: ['Actually make it three', 'Show my calendar', 'Start today’s session'],
+        contextPatch: { lastAvailabilityScope: 'week', topic: 'calendar' },
+        status: 'Planning your week',
+        thinkMs: 1200,
+      }
+    }
+
+    case 'finished_workout': {
+      const w = ctx.todayWorkout
+      if (w && w.status === 'completed') return { text: voice.compose({ core: `Already logged: ${w.title} is done for today. ${voice.cheer(w.id)}` }), suggestions: ['What should I eat now?', 'How am I progressing?'] }
+      if (w && (w.status === 'planned' || w.status === 'in_progress')) {
+        const done = w.exercises.reduce((a, e) => a + e.sets.filter((s) => s.completed).length, 0)
+        const total = w.exercises.reduce((a, e) => a + e.sets.length, 0)
+        return {
+          text: voice.compose({ core: `${voice.cheer(w.id)} ${w.title} logged as complete${done && done < total ? ` (${done} of ${total} sets ticked; I counted the rest as done)` : ''}. Your streak, progress and calendar are updated.`, reason: 'Eat within a couple of hours and prioritise protein.', calm: 'Rest well.', push: 'Recover like it matters.' }),
+          cards: [workoutCard({ ...w, status: 'completed' })],
+          actions: [{ type: 'complete_workout', workoutId: w.id }],
+          suggestions: ['What should I eat now?', 'How am I progressing?', 'Plan tomorrow'],
+          contextPatch: { lastWorkoutId: w.id, topic: 'workout' },
+          thinkMs: 700,
+        }
+      }
+      // Nothing planned: log an ad-hoc session from the description.
+      const focus = /upper|push|pull|chest|arms|back/.test(intent.text) ? 'upper' : /lower|legs?|squat/.test(intent.text) ? 'lower' : /run|cardio|bike|row|swim|hiit/.test(intent.text) ? 'conditioning' : 'full_body'
+      const minutes = parseMinutesLoose(intent.text) ?? 45
+      const gen = generateWorkout({ user: ctx.user, goals: ctx.goals, history: ctx.workouts, constraints: { focus, minutes }, seed: `${today}-adhoc-${intent.text.length}` })
+      gen.title = `${FOCUS_LABELS[focus]} · logged`
+      gen.startedAt = new Date(Date.now() - minutes * 60_000).toISOString()
+      return {
+        text: voice.compose({ core: `Logged a ${minutes}-minute ${FOCUS_LABELS[focus].toLowerCase()} session for today. It counts toward your week and your streak.`, reason: 'If you tell me the main lifts and loads I can track those too.', calm: 'Nice work.', push: 'That is how weeks are won.' }),
+        actions: [{ type: 'create_workout', workout: gen }, { type: 'complete_workout', workoutId: gen.id }],
+        suggestions: ['What should I eat now?', 'How am I progressing?'],
+        contextPatch: { lastWorkoutId: gen.id, topic: 'workout' },
+        thinkMs: 700,
+      }
+    }
+
+    case 'goal_delta': {
+      const target = round(ctx.user.weightKg + (intent.direction === 'gain' ? intent.kg : -intent.kg), 1)
+      const type = intent.direction === 'gain' ? 'build_muscle' : 'lose_fat'
+      const r = respond({ kind: 'set_goal', goalType: type, metric: 'body_weight', target }, req, ctx, voice)
+      const targets = computeTargets(ctx.user, [{ id: 'tmp', type, rank: 'primary', label: GOAL_LABELS[type], createdAt: '' }], Boolean(ctx.todayWorkout))
+      return {
+        ...r,
+        text: voice.compose({
+          core: `${intent.direction === 'gain' ? 'Gain' : 'Lose'} ${intent.kg} kg: goal set to ${GOAL_LABELS[type].toLowerCase()} with a target of ${target} kg (from ${ctx.user.weightKg} kg). Nutrition targets are now about ${targets.calories.toLocaleString()} kcal and ${targets.proteinG} g protein on training days, and every new workout follows the new goal.`,
+          reason: intent.direction === 'gain' ? `At a clean ${0.25}–${0.5} kg a week that is roughly ${Math.ceil(intent.kg / 0.4)} weeks. Faster mostly adds fat.` : `At ${0.5} kg a week that is about ${Math.ceil(intent.kg / 0.5)} weeks while keeping your strength.`,
+          extra: ctx.activeProgram ? `${ctx.activeProgram.name} was built for a different goal; say “rebuild my program” and I will refit it.` : undefined,
+          push: 'Now we chase it.',
+          calm: 'Clear target, steady pace.',
+        }),
+        suggestions: ['How does that affect my plan?', 'What should I eat today?', ctx.activeProgram ? 'Rebuild my program' : 'Build today’s workout'],
+      }
+    }
+
+    case 'dislike_exercise': {
+      const key = intent.text.toLowerCase().replace(/^(doing|the)\s+/, '').replace(/s$/, '')
+      const existing = ctx.user.dislikedExercises ?? []
+      const list = existing.includes(key) ? existing : [...existing, key]
+      const actions: CoachAction[] = [
+        { type: 'update_user', patch: { dislikedExercises: list } },
+        { type: 'remember', item: { category: 'preference', text: `Dislikes ${intent.text.toLowerCase()}; avoid it in workouts`, source: 'conversation' } },
+      ]
+      let cards: CoachCard[] | undefined
+      let swapped = ''
+      const w = ctx.todayWorkout
+      if (w && w.status === 'planned') {
+        const affected = w.exercises.filter((e) => exerciseMatchesKeyword(e.exerciseId, e.name, key))
+        if (affected.length) {
+          let modified = w
+          for (const e of affected) modified = replaceExercise(modified, e.exerciseId, { ...ctx.user, dislikedExercises: list }, ctx.workouts).workout
+          actions.push({ type: 'update_workout', workout: modified })
+          cards = [workoutCard(modified)]
+          swapped = ` I swapped ${affected.map((e) => e.name.toLowerCase()).join(' and ')} out of today’s session.`
+        }
+      }
+      return {
+        text: voice.compose({ core: `Noted, no ${intent.text.toLowerCase()}. I will leave it out of your workouts from now on.${swapped}`, reason: 'If a goal really needs something similar I will offer an alternative first.', quip: 'Filed under “never again”.' }),
+        cards,
+        actions,
+        suggestions: ['Build today’s workout', 'What do you know about me?'],
+        thinkMs: 500,
+      }
+    }
+
+    case 'goal_impact': {
+      const primary = ctx.goals.find((g) => g.rank === 'primary')
+      if (!primary) return respond({ kind: 'set_goal' }, req, ctx, voice)
+      const targets = computeTargets(ctx.user, ctx.goals, Boolean(ctx.todayWorkout && ctx.todayWorkout.status !== 'skipped'))
+      const lines = [
+        `Your primary goal is ${primary.label.toLowerCase()}${primary.targetValue ? ` (target ${primary.targetValue} ${primary.targetUnit ?? ''})`.replace(/\s+\)/, ')') : ''}.`,
+        `Nutrition: ${targets.calories.toLocaleString()} kcal and ${targets.proteinG} g protein today (${targets.rationale.toLowerCase()})`,
+        `Training: sessions are built for ${primary.type === 'strength' ? 'heavier, lower-rep work' : primary.type === 'lose_fat' ? 'muscle-protecting lifting with shorter rests' : primary.type === 'conditioning' || primary.type === 'endurance' ? 'a stronger engine with intervals mixed in' : primary.type === 'build_muscle' ? 'progressive volume in the 8–12 rep range' : 'balanced, sustainable sessions'}.`,
+      ]
+      if (ctx.activeProgram && ctx.activeProgram.goalType !== primary.type) lines.push(`${ctx.activeProgram.name} was built for ${GOAL_LABELS[ctx.activeProgram.goalType].toLowerCase()}, so it no longer matches; I can rebuild it around the new goal.`)
+      else if (ctx.activeProgram) lines.push(`${ctx.activeProgram.name} already matches this goal.`)
+      return {
+        text: voice.compose({ core: lines.join(' '), calm: 'Everything downstream follows the goal.', push: 'One goal, whole system aligned.' }),
+        suggestions: ctx.activeProgram && ctx.activeProgram.goalType !== primary.type ? ['Rebuild my program', 'What should I eat today?'] : ['Build today’s workout', 'What should I eat today?'],
+        contextPatch: { topic: 'goal' },
+        thinkMs: 600,
+      }
+    }
+
+    case 'tomorrow': {
+      const tw = ctx.tomorrowWorkout
+      const tomorrowDate = addDays(ctx.now, 1)
+      const isTrainingDay = ctx.user.availability.preferredDays.includes(tomorrowDate.getDay())
+      if (tw) {
+        return {
+          text: voice.compose({ core: `Tomorrow is ${tw.title}: about ${formatMinutes(tw.estimatedMinutes)}, ${tw.exercises.length} exercises${tw.programId ? ', from your program' : ''}.`, reason: tw.coachNote, calm: 'Sleep well tonight and it will feel easy.', push: 'Prep your kit tonight.' }),
+          cards: [workoutCard(tw)],
+          suggestions: ['Make it shorter', 'Move it to another day', 'What should I eat tomorrow?'],
+          contextPatch: { lastWorkoutId: tw.id, topic: 'workout' },
+        }
+      }
+      if (isTrainingDay) return respond({ kind: 'make_workout', constraints: { forDate: 'tomorrow' } }, req, ctx, voice)
+      return {
+        text: voice.compose({ core: `Tomorrow is a rest day on your schedule. ${ctx.tomorrowWorkout ? '' : 'A walk and good sleep, or say the word and I will plan something.'}`, calm: 'Rest is part of the plan.' }),
+        suggestions: ['Plan a workout for tomorrow', 'Plan my week'],
+        contextPatch: { topic: 'calendar' },
+      }
+    }
+
+    case 'energy_report': {
+      const scale = clamp(11 - intent.value, 1, 10)
+      return handleFatigue(scale, ctx, voice)
     }
 
     case 'thanks':
@@ -1004,7 +1377,7 @@ function modifyWorkout(w: Workout, change: WorkoutChange, ctx: CoachContext, voi
   }
 }
 
-function weekPlanEvents(ctx: CoachContext, days: number[]): Array<{ date: string; title: string; workout: Workout }> {
+function weekPlanEvents(ctx: CoachContext, days: number[], limit?: number): Array<{ date: string; title: string; workout: Workout }> {
   const out: Array<{ date: string; title: string; workout: Workout }> = []
   const history = [...ctx.workouts]
   const start = ctx.now
@@ -1012,6 +1385,7 @@ function weekPlanEvents(ctx: CoachContext, days: number[]): Array<{ date: string
     const d = addDays(start, i)
     const key = dayKey(d)
     if (!days.includes(d.getDay())) continue
+    if (limit !== undefined && out.length >= limit) break
     const existing = ctx.workouts.find((w) => w.scheduledFor === key && w.status !== 'skipped')
     if (existing) {
       out.push({ date: key, title: existing.title, workout: existing })
@@ -1029,45 +1403,84 @@ function nextWeekdayIncludingPast(weekday: number, from: Date): Date {
   return d
 }
 
-/** Rough meal estimate from a free-text description. Deliberately simple and transparent. */
-function estimateMeal(text: string): { kcal: number; protein: number; note: string } {
-  const t = text.toLowerCase()
-  const items: Array<[RegExp, number, number]> = [
-    [/chicken|turkey/, 280, 45],
-    [/beef|steak|mince/, 380, 40],
-    [/salmon|tuna|fish|prawn|shrimp/, 300, 35],
-    [/egg/, 160, 13],
-    [/tofu|tempeh/, 220, 22],
-    [/lentil|beans|chickpea/, 230, 14],
-    [/rice|quinoa|couscous/, 260, 5],
-    [/pasta|noodle|spaghetti/, 380, 12],
-    [/potato|fries|chips/, 300, 5],
-    [/bread|toast|wrap|tortilla|bun|pizza/, 250, 8],
-    [/salad|veg|vegetable|broccoli|spinach|greens/, 80, 3],
-    [/cheese|halloumi|paneer/, 200, 12],
-    [/yogurt|yoghurt|skyr/, 150, 15],
-    [/oats|granola|cereal/, 300, 8],
-    [/avocado|olive|nuts|peanut/, 180, 4],
-    [/sauce|dressing|mayo|butter|cream/, 120, 1],
-    [/dessert|cake|ice cream|chocolate|cookie/, 350, 4],
-    [/beer|wine|cocktail/, 180, 0],
-  ]
-  let kcal = 0
-  let protein = 0
-  let hits = 0
-  for (const [re, k, p] of items) {
-    if (re.test(t)) {
-      kcal += k
-      protein += p
-      hits++
-    }
+const WEEKDAY_NAMES_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function slotLabel(slot: Meal['slot']): string {
+  return { breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner', snack: 'a snack', pre_workout: 'pre-workout', post_workout: 'post-workout' }[slot]
+}
+
+function foodCard(meal: LoggedMeal): CoachCard {
+  return { id: uid('card'), type: 'food', refId: meal.id, title: meal.name, subtitle: `${meal.calories} kcal · ${meal.proteinG} g protein` }
+}
+
+function imageFromRequest(req: CoachRequest, ctx: CoachContext): { id: string; preview?: string } | undefined {
+  const direct = req.attachments.find((a) => a.kind === 'image')
+  if (direct) return { id: direct.id, preview: direct.previewDataUrl }
+  // A photo sent a moment ago (the coach asked what it was).
+  const recent = [...ctx.history].reverse().slice(0, 4).find((m) => m.role === 'user' && m.attachments?.some((a) => a.kind === 'image'))
+  const att = recent?.attachments?.find((a) => a.kind === 'image')
+  return att ? { id: att.id, preview: att.previewDataUrl } : undefined
+}
+
+/** One honest, contextual line about where the day stands after a meal. */
+function intakeLine(ctx: CoachContext, adding?: LoggedMeal, replacing?: LoggedMeal): string {
+  const n = ctx.nutrition
+  const already = n.meals.some((m) => m.id === adding?.id)
+  const base = { calories: n.consumed.calories, proteinG: n.consumed.proteinG }
+  if (replacing && n.meals.some((m) => m.id === replacing.id)) {
+    base.calories -= replacing.calories
+    base.proteinG -= replacing.proteinG
   }
-  if (!hits) return { kcal: 550, protein: 25, note: 'A typical mixed plate. Tell me the main ingredient and I can tighten this.' }
-  if (/big|large|double|huge/.test(t)) {
-    kcal = Math.round(kcal * 1.3)
-    protein = Math.round(protein * 1.3)
+  if (adding && (!already || replacing)) {
+    base.calories += adding.calories
+    base.proteinG += adding.proteinG
   }
-  return { kcal: Math.round(kcal / 10) * 10, protein, note: protein >= 30 ? 'Solid protein hit. Nothing to change.' : 'A little light on protein; add a shake or some yogurt later if you can.' }
+  const leftK = n.targets.calories - base.calories
+  const leftP = n.targets.proteinG - base.proteinG
+  const goal = primaryGoal(ctx.goals)
+  const protein = `You are at about ${Math.round(base.proteinG)} g protein for the day`
+  if (leftP <= 0) return `${protein}, which already covers your ${n.targets.proteinG} g target.${leftK < -150 ? ` You are ${Math.abs(leftK).toLocaleString()} kcal over, so keep the rest light.` : ''}`
+  if (leftK <= 0) return `${protein}. Calories are at target, so anything else today should be light and protein-only.`
+  const tail = goal === 'build_muscle' ? (leftP > 40 ? `keep the next meal protein-focused, ${Math.round(leftP)} g to go.` : `${Math.round(leftP)} g protein to go, no need to force a huge meal.`) : goal === 'lose_fat' ? `${leftK.toLocaleString()} kcal left, which is one solid meal.` : `${leftK.toLocaleString()} kcal and ${Math.round(leftP)} g protein left.`
+  return `${protein}; ${tail}`
+}
+
+function foodDraftReply(analysis: FoodAnalysis, req: CoachRequest, ctx: CoachContext, voice: Voice, slotHint?: Meal['slot']): CoachReply {
+  const image = imageFromRequest(req, ctx)
+  const slot = slotHint ?? slotForTime(ctx.now)
+  const meal = buildMeal(analysis, { date: todayKey(), slot, source: image ? 'scan' : 'text', status: 'draft', attachmentId: image?.id, previewDataUrl: image?.preview })
+  const conf = confidenceLabel(meal.confidence)
+  const parts = meal.items.map((i) => `${i.name}${i.unit === 'g' || i.unit === 'ml' ? ` ${i.grams} ${i.unit}` : i.quantity !== 1 ? ` ×${i.quantity}` : ''}`).join(', ')
+  return {
+    text: voice.compose({
+      core: `${analysis.analysis === 'vision' ? 'From the photo I can see' : 'From your description I count'}: ${parts}. Estimated ${meal.calories} kcal, ${meal.proteinG} g protein, ${meal.carbsG} g carbs, ${meal.fatG} g fat (${conf} confidence).`,
+      reason: analysis.notes[0] ?? (conf === 'high' ? 'Portions look standard.' : 'Portion sizes are the main uncertainty.'),
+      extra: 'Correct anything (“more rice”, “200 g of rice”, “no sauce”, “I only ate half”) and then add it.',
+      calm: 'Looks like a good plate.',
+      push: 'Fuel, checked. Log it and move on.',
+      quip: 'Your rice has been counted. It never stood a chance.',
+    }),
+    cards: [foodCard(meal)],
+    actions: [{ type: 'log_meal', meal }],
+    suggestions: [`Add it to ${slotLabel(slot)}`, 'There was more rice', 'I only ate half'],
+    contextPatch: { lastMealId: meal.id, topic: 'nutrition' },
+    status: 'Estimating your meal',
+    thinkMs: 1000,
+  }
+}
+
+function exerciseMatchesKeyword(exerciseId: string, name: string, key: string): boolean {
+  const k = key.replace(/ing$/, '').replace(/s$/, '')
+  const hay = `${exerciseId.replace(/_/g, ' ')} ${name}`.toLowerCase()
+  if (hay.includes(k)) return true
+  if (/^run/.test(k)) return /sprint|incline walk|jog|run/.test(hay)
+  if (/^cardio/.test(k)) return /interval|sprint|burpee|jump rope|mountain climber|incline walk/.test(hay)
+  return false
+}
+
+function parseMinutesLoose(text: string): number | undefined {
+  const m = text.match(/(\d{1,3})\s*(?:min|mins|minutes)/i)
+  return m ? Number(m[1]) : undefined
 }
 
 function categorize(text: string): MemoryItem['category'] {

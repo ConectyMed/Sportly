@@ -300,7 +300,7 @@ export function generateWorkout(input: GenerateWorkoutInput): Workout {
 
   const equipment = constraints.equipment?.length ? constraints.equipment : user.equipment.length ? user.equipment : ['bodyweight']
   const minutes = constraints.minutes ?? user.availability.sessionMinutes
-  const exclude = new Set(constraints.excludeExerciseIds ?? [])
+  const exclude = new Set([...(constraints.excludeExerciseIds ?? []), ...dislikedExerciseIds(user)])
   const lvl = LEVEL_NUM[user.level]
   const intensityMult = (input.program?.intensity ?? 1) * (constraints.intensity === 'light' ? 0.9 : 1)
 
@@ -431,6 +431,22 @@ export function shortenWorkout(workout: Workout, targetMinutes: number): Workout
   }
 }
 
+/** True when the exercise matches one of the user's persistent "never give me this" preferences. */
+export function isDislikedExercise(ex: Pick<ExerciseDefinition, 'id' | 'name'>, user: Pick<UserProfile, 'dislikedExercises'>): boolean {
+  const list = user.dislikedExercises ?? []
+  if (!list.length) return false
+  const name = ex.name.toLowerCase()
+  return list.some((d) => {
+    const k = d.toLowerCase().trim()
+    return k === ex.id || name.includes(k) || ex.id.includes(k.replace(/\s+/g, '_'))
+  })
+}
+
+export function dislikedExerciseIds(user: Pick<UserProfile, 'dislikedExercises'>): string[] {
+  if (!user.dislikedExercises?.length) return []
+  return EXERCISES.filter((ex) => isDislikedExercise(ex, user)).map((ex) => ex.id)
+}
+
 export function findSubstitute(exerciseId: string, equipment: EquipmentId[], exclude: string[] = [], level: FitnessLevel = 'intermediate'): ExerciseDefinition | undefined {
   const original = getExercise(exerciseId)
   const lvl = LEVEL_NUM[level]
@@ -452,7 +468,7 @@ export function findSubstitute(exerciseId: string, equipment: EquipmentId[], exc
 export function replaceExercise(workout: Workout, exerciseId: string, user: UserProfile, history: Workout[], equipmentOverride?: EquipmentId[]): { workout: Workout; replacedWith?: ExerciseDefinition; original: ExerciseDefinition } {
   const original = getExercise(exerciseId)
   const equipment = equipmentOverride ?? workout.constraints?.equipment ?? (user.equipment.length ? user.equipment : ['bodyweight'])
-  const sub = findSubstitute(exerciseId, equipment, workout.exercises.map((e) => e.exerciseId), user.level)
+  const sub = findSubstitute(exerciseId, equipment, [...workout.exercises.map((e) => e.exerciseId), ...dislikedExerciseIds(user)], user.level)
   if (!sub) return { workout, original }
   const exercises = workout.exercises.map((e) => {
     if (e.exerciseId !== exerciseId) return e

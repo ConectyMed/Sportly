@@ -1,5 +1,7 @@
 import { findExerciseByName } from '@/domain/exercises'
-import type { EquipmentId, ExpectSlot, GoalType, WorkoutFocus } from '@/domain/types'
+import type { EquipmentId, ExpectSlot, GoalType, Meal, WorkoutFocus } from '@/domain/types'
+import type { MealCorrection } from './food/foodAnalysis'
+import { findFoodsInText } from './food/foodDatabase'
 import { parseWeekday } from '@/lib/dates'
 
 export type Intent =
@@ -45,6 +47,20 @@ export type Intent =
   | { kind: 'equipment_list'; equipment: EquipmentId[] }
   | { kind: 'plan_choice'; choice: 'follow' | 'blend' | 'reference' }
   | { kind: 'order_advice' }
+  | { kind: 'food_log'; text: string; slot?: Meal['slot'] }
+  | { kind: 'meal_correction'; corrections: MealCorrection[] }
+  | { kind: 'meal_commit'; slot?: Meal['slot'] }
+  | { kind: 'meal_discard' }
+  | { kind: 'eaten_today' }
+  | { kind: 'remaining_nutrition'; macro?: 'protein' | 'calories' | 'carbs' | 'fat' }
+  | { kind: 'menu_help'; options?: string[] }
+  | { kind: 'availability'; days?: number[]; count?: number; scope: 'week' | 'always' }
+  | { kind: 'finished_workout'; text: string }
+  | { kind: 'goal_delta'; kg: number; direction: 'gain' | 'lose' }
+  | { kind: 'dislike_exercise'; text: string }
+  | { kind: 'goal_impact' }
+  | { kind: 'tomorrow' }
+  | { kind: 'energy_report'; value: number }
   | { kind: 'unknown' }
 
 export interface WorkoutConstraintsParsed {
@@ -160,7 +176,17 @@ function parseKg(text: string): number | undefined {
  * Parse the user's message into an intent, using the slot the coach was waiting
  * on and the conversation topic so that "6" or "make it shorter" resolve correctly.
  */
-export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: string; hasAttachments?: boolean; hasWorkout?: boolean }): Intent {
+export interface ParseOptions {
+  expects?: ExpectSlot
+  topic?: string
+  hasAttachments?: boolean
+  hasWorkout?: boolean
+  /** A meal (draft or logged) is in conversational context. */
+  hasMeal?: boolean
+  lastAvailabilityScope?: 'week' | 'always'
+}
+
+export function parseIntent(raw: string, opts: ParseOptions): Intent {
   const text = raw.trim()
   const t = text.toLowerCase()
   if (opts.hasAttachments && !t) return { kind: 'attachment' }
@@ -220,6 +246,18 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
     if (/reference|only|just keep/.test(t)) return { kind: 'plan_choice', choice: 'reference' }
   }
 
+  if (opts.expects === 'meal_slot') {
+    const slot = parseSlot(t)
+    if (slot) return { kind: 'meal_commit', slot }
+  }
+  if (opts.expects === 'menu_options' && t.length > 3 && !/^(no|never mind|skip|nothing)/.test(t)) {
+    return { kind: 'menu_help', options: splitOptions(text) }
+  }
+  if (opts.expects === 'finish_confirm') {
+    if (/^(yes|yep|yeah|sure|do it|log it|ok)/.test(t)) return { kind: 'finished_workout', text: 'yes' }
+    if (/^(no|nope|not yet|nah)/.test(t)) return { kind: 'no' }
+  }
+
   // ---- Attachment follow-ups (only when the coach just asked what an attachment is)
   if (opts.expects === 'attachment_kind') {
     if (/(workout|session)/.test(t)) return { kind: 'today_plan' }
@@ -239,6 +277,73 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
     const area = t.match(/\b(knee|back|lower back|shoulder|neck|elbow|wrist|hip|ankle|hamstring|quad|calf|chest)\b/)?.[1]
     return { kind: 'pain', area, severe }
   }
+
+  // ---- Food journal questions (before corrections, so a question never mutates the meal in context)
+  if (/\b(what|everything) (have|did) i (eat|eaten|had|have)\b|\bwhat i'?ve eaten\b|\bmy (food|meals|intake) (today|so far)\b|\beaten today\b/.test(t)) return { kind: 'eaten_today' }
+  if (/\b(how (much|many)|what'?s?)\b.*\b(protein|calories|kcal|carbs|fat)\b.*\b(left|remaining|to go|have i got)\b|\b(remaining|left)\b.*\b(protein|calories|kcal|carbs|fat|for today)\b|\bhow (am i|'?m i) doing on (food|protein|calories|nutrition)/.test(t)) {
+    const macro = /protein/.test(t) ? 'protein' : /carb/.test(t) ? 'carbs' : /\bfat\b/.test(t) ? 'fat' : /calorie|kcal/.test(t) ? 'calories' : undefined
+    return { kind: 'remaining_nutrition', macro }
+  }
+  if (/\b(what would you (choose|pick|order|go for)|what should i (choose|pick|go for)|help me (choose|pick|order)|which (one|dish|option))\b/.test(t)) {
+    // Options can ride along in the same message: “…choose: salmon, pasta or a burger?”
+    const inline = text.match(/(?::|—|–|\bbetween\b|\bfrom\b)\s*(.+?)\??$/i)
+    const options = inline ? splitOptions(inline[1]).filter((o) => findFoodsInText(o).length > 0) : []
+    return { kind: 'menu_help', options: options.length >= 2 ? options : undefined }
+  }
+
+  // ---- Meal in context: corrections, commit, discard
+  // “I had X” starts a new meal unless it is clearly an addition (“I also had…”).
+  const startsNewMeal = /^(i )?(just )?(ate|had|have eaten|'?ve had|'?ve eaten)\b/.test(t) && !/\b(also|too|as well|on top|with it|to it|plus)\b/.test(t)
+  if (opts.hasMeal && !startsNewMeal) {
+    if (/^(add|log|save|put)\b.*\b(it|this|that|the meal|meal)\b|^(log|add|save) it|^(looks|that'?s|it'?s) (right|correct|good|fine)|^(confirm|yes,? (log|add) it)/.test(t) || /^(add|log) (it |this |that )?(to|as) (my )?(breakfast|lunch|dinner|snack)/.test(t)) {
+      return { kind: 'meal_commit', slot: parseSlot(t) }
+    }
+    if (/^(don'?t|do not) (log|add|save)|^(discard|forget|scrap|delete|remove) (it|this|that|the meal|that meal)|^never mind|^cancel (it|that|the meal)/.test(t)) return { kind: 'meal_discard' }
+    const corrections = parseMealCorrections(text)
+    if (corrections.length) return { kind: 'meal_correction', corrections }
+  }
+
+  // ---- Food journal: logging
+  const foodLog = t.match(/^(?:i )?(?:just )?(?:ate|had|eat|have eaten|'?ve eaten|'?ve had|am eating|'?m eating|i'?m having|having|ate this|log(?:ged)?)\b\s*(?::)?\s*(.*)$/) ?? t.match(/^for (breakfast|lunch|dinner|(?:a )?snack)(?:,| i (?:had|ate))\s+(.*)$/) ?? t.match(/^(?:log|add|track) (?:my )?(breakfast|lunch|dinner|snack)\s*(?::|of|-)?\s*(.*)$/)
+  if (foodLog) {
+    const body = foodLog[2] ?? foodLog[1]
+    const slot = parseSlot(t)
+    const explicitEating = /^(?:i )?(?:just )?(?:ate|eaten|'?ve eaten|have eaten|am eating|'?m eating)\b/.test(t)
+    const notFood = /\b(weight|workout|session|run|walk|steps|sleep|nap|rest|shower|meeting|day|time|minutes?|hours?)\b/.test(body ?? '')
+    const mentionsFood = Boolean(body) && (findFoodsInText(body).length > 0 || Boolean(slot))
+    if (body && body.length > 2 && !/^(this|it|that|my workout|my session)$/.test(body.trim()) && (explicitEating ? !/\b(weight|workout|session)\b/.test(body) : mentionsFood && !notFood)) return { kind: 'food_log', text: body, slot }
+  }
+  if (/^i ate this|^this is what i ate|^my (lunch|dinner|breakfast|meal)\b/.test(t)) return { kind: 'food_log', text: text, slot: parseSlot(t) }
+
+  // ---- Finished a workout
+  if (/\b(i )?(just )?(finished|done with|completed|wrapped up)\b.*\b(workout|session|training|lifting|gym)\b|\b(workout|session|training) (is )?(done|finished|complete)\b|^done training\b/.test(t) && !/haven'?t|not yet|didn'?t/.test(t)) return { kind: 'finished_workout', text }
+
+  // ---- Availability (persistent vs this week)
+  const dayList = t.match(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/g)
+  if (dayList && dayList.length >= 2 && /\b(can|able to|available|free|train|workout|work out|gym)\b/.test(t) && !/move|reschedule|switch/.test(t)) {
+    const days = [...new Set(dayList.map((d) => parseWeekday(d)).filter((d): d is number => d !== null))]
+    const scope: 'week' | 'always' = /this week|next week|only this|just this/.test(t) ? 'week' : 'always'
+    return { kind: 'availability', days, scope }
+  }
+  const countDays = t.match(/\b(i can|i'?ll|i will|i'?m able to|able to|can only|only)\s+(?:only )?(?:train|work ?out|do|manage|make)\s+(\d|one|two|three|four|five|six)\s+(?:days?|times?|sessions?)\b/) ?? t.match(/\b(\d|one|two|three|four|five|six)\s+(?:days?|times?|sessions?)\s+(?:a|per|this|next)\s+week\b/)
+  if (countDays && /train|work ?out|session|day|gym|week/.test(t) && !/program|goal|target/.test(t)) {
+    const n = wordToNumber(countDays[2] ?? countDays[1])
+    if (n) return { kind: 'availability', count: n, scope: /this week|next week|only this/.test(t) ? 'week' : /always|usually|from now on|every week|going forward/.test(t) ? 'always' : opts.lastAvailabilityScope ?? 'week' }
+  }
+  if (opts.lastAvailabilityScope && /^(actually|no,?|hmm,?)?\s*(make it|let'?s (do|say)|change (it|that) to)\s+(\d|one|two|three|four|five|six)\b/.test(t)) {
+    const n = wordToNumber(t.match(/(\d|one|two|three|four|five|six)\b/)![1])
+    if (n) return { kind: 'availability', count: n, scope: opts.lastAvailabilityScope }
+  }
+
+  // ---- Goal deltas, dislikes, goal impact, tomorrow, energy
+  const delta = t.match(/\b(gain|put on|add|lose|drop|shed)\s+(?:about |around |roughly )?(\d{1,2}(?:[.,]\d)?)\s*(?:kg|kilos?|kilograms?)\b/)
+  if (delta && !/bench|squat|deadlift|bar\b/.test(t)) return { kind: 'goal_delta', kg: Number(delta[2].replace(',', '.')), direction: /gain|put on|add/.test(delta[1]) ? 'gain' : 'lose' }
+  const dislike = t.match(/\b(?:i )?(?:hate|can'?t stand|don'?t like|dislike|never (?:give me|make me do|program)|no more|stop giving me|not a fan of)\s+([a-z][a-z\- ]{2,30}?)(?:\s+(?:please|today|anymore|again)|[.,!]|$)/)
+  if (dislike && !/(this|it|that|the (plan|program|workout))$/.test(dislike[1].trim())) return { kind: 'dislike_exercise', text: dislike[1].trim() }
+  if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|i (changed|updated) my goal|does (that|this) change (my|the) plan)\b/.test(t)) return { kind: 'goal_impact' }
+  if (/^(what about|what'?s|and|how about)\s+tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have) tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'tomorrow' }
+  const energy = t.match(/\b(?:my )?energy (?:is |at |level )?(?:a |an )?(10|[1-9])(?:\s*(?:\/|out of|of)\s*10)?\b/)
+  if (energy) return { kind: 'energy_report', value: Number(energy[1]) }
 
   // ---- Coach identity
   const rename = t.match(/(?:call you|name you|your name is|rename you(?: to)?|be called)\s+([a-z][a-z'-]{1,20})/i)
@@ -384,6 +489,93 @@ function parsePersonality(t: string): { motivation?: number; tone?: number; humo
   if (/\b(shorter answers|concise|brief|less talk|too long|keep it short|less detail|too wordy)\b/.test(t)) p.communication = 12
   if (/\b(more detail|explain more|longer answers|elaborate|more context|why)\b/.test(t) && /\b(more detail|explain more|longer|elaborate|more context)\b/.test(t)) p.communication = 88
   return Object.keys(p).length ? p : undefined
+}
+
+
+export function parseSlot(t: string): Meal['slot'] | undefined {
+  const s = t.toLowerCase()
+  if (/\bbreakfast\b/.test(s)) return 'breakfast'
+  if (/\blunch\b/.test(s)) return 'lunch'
+  if (/\bdinner\b|\btonight\b|\bsupper\b/.test(s)) return 'dinner'
+  if (/\bsnack\b/.test(s)) return 'snack'
+  if (/\bpre[- ]?workout\b/.test(s)) return 'pre_workout'
+  if (/\bpost[- ]?workout\b|\bafter (my |the )?workout\b/.test(s)) return 'post_workout'
+  return undefined
+}
+
+function wordToNumber(w: string): number | undefined {
+  const map: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 }
+  if (/^\d$/.test(w)) return Number(w)
+  return map[w]
+}
+
+function splitOptions(text: string): string[] {
+  return text
+    .split(/,|\bor\b|\band\b|\n|;|\//i)
+    .map((s) => s.replace(/^(the|a|an)\s+/i, '').trim())
+    .filter((s) => s.length > 2)
+    .slice(0, 6)
+}
+
+/** Parse natural corrections to a meal in context. Order-preserving; several can stack. */
+export function parseMealCorrections(raw: string): MealCorrection[] {
+  const t = raw.toLowerCase().replace(/[.!]+$/, '')
+  const out: MealCorrection[] = []
+  const slot = parseSlot(t)
+  if (slot && /\b(was|is|it'?s|make it|actually|not lunch|not dinner|not breakfast|this was|that was|log (it )?as|count (it )?as)\b/.test(t) && !/^(add|log|save)/.test(t)) out.push({ type: 'slot', slot })
+  // Portion of the whole meal
+  const half = t.match(/\b(only )?(ate|had|finished|eat)\s+(about |around |roughly )?(half|a half|a third|two thirds|three quarters|a quarter|most|all)\b/) ?? t.match(/^(only )?(half|a third|two thirds|three quarters|a quarter)( of it| of that| of this)?$/)
+  if (half) {
+    const w = half[4] ?? half[2]
+    const factor = /half/.test(w) ? 0.5 : /two thirds/.test(w) ? 0.67 : /third/.test(w) ? 0.33 : /three quarters/.test(w) ? 0.75 : /quarter/.test(w) ? 0.25 : /most/.test(w) ? 0.8 : 1
+    if (factor !== 1) out.push({ type: 'scale', factor })
+  }
+  if (/\b(double|twice) (that|it|the portion|as much)\b|\bi had two of (these|those|them)\b/.test(t)) out.push({ type: 'scale', factor: 2 })
+  // Explicit grams: "200g of rice", "the rice was 200g", "rice 200 g"
+  const gramsRe = /(\d{2,4})\s?(?:g|gr|grams?)\s+(?:of\s+)?([a-z][a-z ]{2,25}?)(?=$|,|\band\b|\bnot\b|\.)|([a-z][a-z ]{2,25}?)\s+(?:was|were|is|are)\s+(?:about |around |roughly |more like )?(\d{2,4})\s?(?:g|gr|grams?)\b/g
+  let m: RegExpExecArray | null
+  while ((m = gramsRe.exec(t))) {
+    const grams = Number(m[1] ?? m[4])
+    const food = (m[2] ?? m[3]).replace(/^(the|of|my)\s+/, '').trim()
+    if (grams && food) out.push({ type: 'set_grams', food, grams })
+  }
+  // Counts: "there were two chicken breasts", "3 eggs", "two slices of bread"
+  const countRe = /\b(?:there (?:were|was)|it was|i had|i ate|had)?\s*(\d|one|two|three|four|five|six)\s+(?:(?:big|large|small|whole)\s+)?(?:(?:slices?|pieces?|cups?|bowls?|scoops?|glasses|fillets?) of\s+)?([a-z][a-z ]{2,25}?)(?=s?\b(?:,|$|\band\b|\bnot\b))/g
+  while ((m = countRe.exec(t))) {
+    const count = wordToNumber(m[1])
+    const food = m[2].trim()
+    if (!count || /^(g|gr|grams?|kg|ml|minutes?|hours?|of)$/.test(food)) continue
+    if (out.some((c) => c.type === 'set_grams' && c.food === food)) continue
+    out.push({ type: 'set_count', food, count })
+  }
+  // Remove: "no sauce", "remove the cheese", "without the sauce", "take out the rice", "skip the bread", "there was no sauce"
+  const removeRe = /\b(?:no|without|remove|take out|take off|drop|skip|minus|forget|delete|wasn'?t any|there was no|there wasn'?t)\s+(?:the |any |that )?([a-z][a-z ]{2,25}?)(?=$|,|\band\b|\bthough\b|\bactually\b|\.)/g
+  while ((m = removeRe.exec(t))) {
+    const food = m[1].trim()
+    if (/^(sauce|cheese|rice|bread|oil|butter|dressing|mayo|fries|chips|dessert|potato|potatoes|pasta|salad|veg|vegetables|avocado|egg|eggs|beans|chicken|salmon|nuts|honey|sugar|cream|wine|beer|juice|milk|bacon|ham|tomato|tomatoes)$/.test(food) || out.length === 0) {
+      if (!/^(it|this|that|the meal|meal|lunch|dinner|breakfast)$/.test(food)) out.push({ type: 'remove', food })
+    }
+  }
+  // More / less: "more rice", "there was more rice", "less sauce", "not that much rice", "bigger portion of rice"
+  const moreRe = /\b(?:there was |it had |with |i had )?(more|less|fewer|extra|bigger|smaller|a lot more|way more|a bit more|a bit less|much more|much less|barely any|hardly any|not (?:that |so )?much|double the|half the)\s+(?:portion of |of )?([a-z][a-z ]{2,25}?)(?=$|,|\band\b|\bthan\b|\bthough\b|\.)/g
+  while ((m = moreRe.exec(t))) {
+    const word = m[1]
+    const food = m[2].replace(/^the\s+/, '').trim()
+    if (out.some((c) => (c.type === 'set_grams' || c.type === 'set_count' || c.type === 'remove') && c.food === food)) continue
+    const isLess = /less|fewer|smaller|barely|hardly|not|half/.test(word)
+    const factor = /a lot|way|much|double/.test(word) ? (isLess ? 0.5 : 2) : /a bit/.test(word) ? (isLess ? 0.8 : 1.25) : isLess ? 0.6 : 1.5
+    out.push(isLess ? { type: 'less', food, factor } : { type: 'more', food, factor })
+  }
+  // Add: "add an egg", "there was also cheese", "plus a beer", "and a slice of bread", "with cheese"
+  const addRe = /(?:^|\b)(?:add|plus|also had|there was also|also|and also|with)\s+(?:an? |some |the )?([a-z][a-z ]{2,30}?)(?=$|,|\.|\band\b)/g
+  while ((m = addRe.exec(t))) {
+    const food = m[1].trim()
+    if (/^(it|this|that|to (my )?(lunch|dinner|breakfast|snack)|the meal|meal|sauce on the side)$/.test(food)) continue
+    if (out.some((c) => c.type !== 'slot' && c.type !== 'scale' && c.type !== 'add' && c.food === food)) continue
+    if (/^(more|less)\b/.test(food)) continue
+    out.push({ type: 'add', text: food })
+  }
+  return out
 }
 
 function capitalize(s: string): string {

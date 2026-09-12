@@ -1,5 +1,6 @@
 import type {
   Attachment,
+  Availability,
   CalendarEvent,
   CoachCard,
   CoachConfig,
@@ -8,6 +9,7 @@ import type {
   DayKey,
   ExpectSlot,
   Goal,
+  LoggedMeal,
   Measurement,
   MemoryItem,
   Message,
@@ -16,10 +18,15 @@ import type {
   UserProfile,
   Workout,
 } from '@/domain/types'
+import type { DailyNutrition } from '@/store/selectors'
+import type { FoodAnalysis } from './food/foodAnalysis'
 import type { Insight } from './insights'
 import type { Readiness } from './readiness'
 
-/** Everything the coach can see when it answers. Built by the orchestrator from live app state. */
+/**
+ * Everything the coach can see when it answers. Built by the orchestrator from
+ * live app state on every turn, so the coach never reasons from stale assumptions.
+ */
 export interface CoachContext {
   now: Date
   user: UserProfile
@@ -29,10 +36,17 @@ export interface CoachContext {
   readiness: Readiness
   todayCheckIn?: DailyCheckIn
   todayWorkout?: Workout
+  tomorrowWorkout?: Workout
   /** Workout currently referenced by the conversation (may equal todayWorkout). */
   contextWorkout?: Workout
   activeProgram?: Program
   todayNutrition?: NutritionPlan
+  /** Derived food journal for today: targets, consumed, remaining, meals. */
+  nutrition: DailyNutrition
+  /** Meal currently being discussed (draft or logged). */
+  contextMeal?: LoggedMeal
+  /** Whether a real vision model is available for food photos. */
+  foodVision: boolean
   workouts: Workout[]
   events: CalendarEvent[]
   measurements: Measurement[]
@@ -47,9 +61,15 @@ export type CoachAction =
   | { type: 'create_workout'; workout: Workout; replaceWorkoutId?: string }
   | { type: 'update_workout'; workout: Workout }
   | { type: 'skip_workout'; workoutId: string }
+  /** Drop a planned (never started) workout and its calendar event, e.g. when a week plan shrinks. */
+  | { type: 'remove_workout'; workoutId: string }
+  | { type: 'complete_workout'; workoutId: string }
   | { type: 'create_program'; program: Program; workouts: Workout[]; events: CalendarEvent[]; replaceProgramId?: string }
   | { type: 'cancel_program'; programId: string }
   | { type: 'create_nutrition_plan'; plan: NutritionPlan }
+  | { type: 'log_meal'; meal: LoggedMeal }
+  | { type: 'update_meal'; meal: LoggedMeal }
+  | { type: 'delete_meal'; mealId: string }
   | { type: 'remember'; item: Omit<MemoryItem, 'id' | 'createdAt'> }
   | { type: 'forget'; memoryId: string }
   | { type: 'set_goal'; goal: Goal }
@@ -58,6 +78,7 @@ export type CoachAction =
   | { type: 'log_measurement'; measurement: Omit<Measurement, 'id' | 'createdAt'> }
   | { type: 'update_coach'; patch: Partial<CoachConfig> }
   | { type: 'update_user'; patch: Partial<UserProfile> }
+  | { type: 'update_availability'; patch: Partial<Availability> }
   | { type: 'notify'; title: string; body: string }
 
 export interface CoachReply {
@@ -77,6 +98,8 @@ export interface CoachRequest {
   text: string
   attachments: Attachment[]
   context: CoachContext
+  /** Food analysis already performed by the orchestrator for an attached image (vision or local). */
+  foodAnalysis?: FoodAnalysis
 }
 
 export interface CoachProvider {
