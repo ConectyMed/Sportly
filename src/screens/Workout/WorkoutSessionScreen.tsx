@@ -209,29 +209,16 @@ export function WorkoutSessionScreen() {
         </AnimatePresence>
       </div>
 
-      {/* Footer controls */}
-      <div className="px-4 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center gap-2">
-        <button aria-label="Previous exercise" disabled={idx === 0} onClick={() => setIdx(idx - 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
-          <ChevronLeft size={20} />
-        </button>
-        <Button variant={allDone ? 'primary' : 'secondary'} size="lg" full onClick={finish}>
-          {allDone ? 'Finish workout' : 'Finish early'}
-        </Button>
-        <button aria-label="Next exercise" disabled={!next} onClick={() => setIdx(idx + 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
-          <ChevronRight size={20} />
-        </button>
-      </div>
-
-      {/* Rest overlay */}
-      <AnimatePresence>
+      {/* Rest panel (in flow, so the controls below stay reachable) */}
+      <AnimatePresence initial={false}>
         {rest && (
-          <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }} transition={{ type: 'spring', stiffness: 300, damping: 30 }} className="fixed left-0 right-0 bottom-0 z-40 px-4 pb-[max(16px,env(safe-area-inset-bottom))]">
-            <div className="max-w-[560px] mx-auto rounded-[26px] bg-bg-elev border border-border-strong shadow-lg p-5 flex items-center gap-5">
+          <motion.div key="rest" initial={{ opacity: 0, y: 16, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 16, height: 0 }} transition={{ type: 'spring', stiffness: 320, damping: 32 }} className="px-4 overflow-hidden">
+            <div className="rounded-[24px] bg-bg-elev border border-border-strong shadow-md p-4 flex items-center gap-4 mb-3">
               <RestRing total={rest.total} left={restLeft} />
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] uppercase tracking-wider text-text-3">Rest</div>
                 <div className="text-[15px] font-medium truncate">{rest.label}</div>
-                <div className="flex gap-2 mt-2.5">
+                <div className="flex gap-2 mt-2">
                   <Button size="sm" variant="secondary" onClick={() => setRest((r) => (r ? { ...r, total: r.total + 30, endsAt: r.endsAt + 30_000 } : r))}>
                     +30s
                   </Button>
@@ -244,6 +231,19 @@ export function WorkoutSessionScreen() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Footer controls */}
+      <div className="sticky bottom-0 bg-bg px-4 pt-2 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center gap-2">
+        <button aria-label="Previous exercise" disabled={idx === 0} onClick={() => setIdx(idx - 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
+          <ChevronLeft size={20} />
+        </button>
+        <Button variant={allDone ? 'primary' : 'secondary'} size="lg" full onClick={finish}>
+          {allDone ? 'Finish workout' : 'Finish early'}
+        </Button>
+        <button aria-label="Next exercise" disabled={!next} onClick={() => setIdx(idx + 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
+          <ChevronRight size={20} />
+        </button>
+      </div>
 
       <Sheet open={exitOpen} onClose={() => setExitOpen(false)} title="Leave workout?">
         <p className="text-[14px] text-text-2 mb-4">Your completed sets are saved. You can come back and continue.</p>

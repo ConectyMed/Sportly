@@ -79,7 +79,7 @@ export function ProgramScreen() {
             <span>
               {completed} of {total} sessions
             </span>
-            <span>Started {formatShortDate(fromDayKey(program.startDate))}</span>
+            <span>{program.startDate > today ? 'Starts' : 'Started'} {formatShortDate(fromDayKey(program.startDate))}</span>
           </div>
           <ProgressBar value={completed / Math.max(1, total)} height={5} />
         </div>

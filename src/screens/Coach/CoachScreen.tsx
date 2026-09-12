@@ -31,6 +31,7 @@ export function CoachScreen() {
   const deleteConversation = useStore((s) => s.deleteConversation)
   const todayWorkout = useStore((s) => selectTodayWorkout(s))
   const activeProgram = useStore((s) => Object.values(s.programs).some((p) => p.status === 'active'))
+  const memoryCount = useStore((s) => s.memory.length)
   const [params, setParams] = useSearchParams()
   const [historyOpen, setHistoryOpen] = useState(false)
   const [prefill, setPrefill] = useState<string | undefined>()
@@ -87,7 +88,7 @@ export function CoachScreen() {
           <CoachMark size={26} active={typing} />
           <div className="flex-1 min-w-0">
             <div className="title text-[16px] leading-none">{coach.name}</div>
-            <div className="text-[11.5px] text-text-3 mt-1 truncate">{typing ? (status ?? 'Thinking…') : conversation?.title === 'New conversation' ? 'Your coach · always here' : (conversation?.title ?? 'Your coach')}</div>
+            <div className="text-[11.5px] text-text-3 mt-1 truncate">{typing ? (status ?? 'Thinking…') : memoryCount > 0 ? `Always here · keeps ${memoryCount} things in mind` : 'Your coach · always here'}</div>
           </div>
           <button aria-label="Coach memory" onClick={() => navigate('/profile/memory')} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
             <Brain size={19} />

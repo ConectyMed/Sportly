@@ -38,6 +38,13 @@ export type Intent =
   | { kind: 'no' }
   | { kind: 'help' }
   | { kind: 'time_answer'; minutes: number }
+  | { kind: 'show_calendar' }
+  | { kind: 'log_weight_prompt' }
+  | { kind: 'meal_description'; text: string }
+  | { kind: 'bloodwork_flag'; text: string }
+  | { kind: 'equipment_list'; equipment: EquipmentId[] }
+  | { kind: 'plan_choice'; choice: 'follow' | 'blend' | 'reference' }
+  | { kind: 'order_advice' }
   | { kind: 'unknown' }
 
 export interface WorkoutConstraintsParsed {
@@ -181,10 +188,42 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
   if (opts.expects === 'pain_location' && t.length < 60) {
     return { kind: 'pain', area: text, severe: /sharp|severe|can't|cannot|unbearable|swollen|numb/.test(t) }
   }
+  if (opts.expects === 'weight_value') {
+    const m = t.match(/(\d{2,3}(?:[.,]\d)?)/)
+    if (m && t.length < 30) return { kind: 'log_weight', kg: Number(m[1].replace(',', '.')) }
+  }
+  if (opts.expects === 'goal_choice') {
+    const g = parseGoalType(t)
+    const kg = parseKg(t)
+    if (/bench/.test(t)) return { kind: 'set_goal', metric: 'bench_press', target: Number(t.match(/(\d{2,3})/)?.[1]) || undefined }
+    if (/squat/.test(t)) return { kind: 'set_goal', metric: 'squat', target: Number(t.match(/(\d{2,3})/)?.[1]) || undefined }
+    if (/deadlift/.test(t)) return { kind: 'set_goal', metric: 'deadlift', target: Number(t.match(/(\d{2,3})/)?.[1]) || undefined }
+    if (/workouts?|sessions?|times/.test(t) && /week/.test(t)) return { kind: 'set_goal', metric: 'workouts_per_week', target: Number(t.match(/(\d)/)?.[1]) || undefined }
+    if (kg) return { kind: 'set_goal', metric: 'body_weight', target: kg, goalType: g }
+    if (g) return { kind: 'set_goal', goalType: g }
+  }
+  if (opts.expects === 'goal_target') {
+    const kg = parseKg(t) ?? (t.match(/^\s*(\d{1,3}(?:[.,]\d)?)\s*$/) ? Number(t.replace(',', '.')) : undefined)
+    const perWeek = t.match(/(\d)\s*(?:per|a|\/)?\s*week/)
+    if (perWeek) return { kind: 'set_goal', metric: 'workouts_per_week', target: Number(perWeek[1]) }
+    if (kg) return { kind: 'set_goal', target: kg }
+  }
+  if (opts.expects === 'meal_description' && t.length > 2 && !/^(no|never mind|skip)/.test(t)) return { kind: 'meal_description', text }
+  if (opts.expects === 'bloodwork_flag') return { kind: 'bloodwork_flag', text }
+  if (opts.expects === 'equipment_list') {
+    const equipment = parseEquipment(t) ?? (/full gym|everything|commercial/.test(t) ? (['barbell', 'dumbbell', 'cable', 'machine', 'bench', 'pullup_bar', 'cardio_machine', 'bodyweight'] as EquipmentId[]) : undefined)
+    if (equipment) return { kind: 'equipment_list', equipment }
+  }
+  if (opts.expects === 'plan_choice') {
+    if (/follow|as[- ]is|use it/.test(t)) return { kind: 'plan_choice', choice: 'follow' }
+    if (/blend|mix|combine|with my goals/.test(t)) return { kind: 'plan_choice', choice: 'blend' }
+    if (/reference|only|just keep/.test(t)) return { kind: 'plan_choice', choice: 'reference' }
+  }
 
   // ---- Attachment follow-ups (only when the coach just asked what an attachment is)
   if (opts.expects === 'attachment_kind') {
-    if (/(meal|food|lunch|dinner|breakfast|plate|what i ate|diet)/.test(t)) return { kind: 'attachment_context', what: /diet plan/.test(t) ? 'meal' : 'meal' }
+    if (/(workout|session)/.test(t)) return { kind: 'today_plan' }
+    if (/(meal|food|lunch|dinner|breakfast|plate|what i ate|diet)/.test(t)) return { kind: 'attachment_context', what: 'meal' }
     if (/(gym|equipment|home gym)/.test(t)) return { kind: 'attachment_context', what: 'equipment' }
     if (/(plan|program|programme|routine|spreadsheet)/.test(t)) return { kind: 'attachment_context', what: 'plan' }
     if (/(progress|physique|body)/.test(t)) return { kind: 'attachment_context', what: 'progress_photo' }
@@ -218,7 +257,8 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
 
   // ---- Weight log
   const kg = parseKg(t)
-  if (kg && /\b(weigh|weighed|weight is|i'?m at|scale|this morning)\b/.test(t) && !/goal|target|want to|get to|reach|bench|squat|deadlift/.test(t)) return { kind: 'log_weight', kg }
+  if (kg && /\b(weigh|weighed|weight is|i'?m at|scale|this morning|log)\b/.test(t) && !/goal|target|want to|get to|reach|bench|squat|deadlift/.test(t)) return { kind: 'log_weight', kg }
+  if (/\b(log|record|track|enter)\b.*\bweight\b/.test(t) || /^weigh[- ]?in/.test(t)) return { kind: 'log_weight_prompt' }
 
   // ---- Goals
   if (/\b(goal|target|aim|want to (reach|get to|hit|weigh|be)|my new goal)\b/.test(t) && !/program|plan for|progress/.test(t)) {
@@ -228,12 +268,13 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
   }
 
   // ---- Programs
-  if (/\b(program|programme|plan)\b/.test(t) && /\b(\d+|twelve|eight|six|four)[- ]?(week|month)|build me|create|make me|design|new program|start a program/.test(t)) {
+  if (/\b(program|programme|plan)\b/.test(t) && /\b(\d+|twelve|eight|six|four)[- ]?(week|month)|build me|create|make me|design|new program|start a program|rebuild|regenerate|redo|change my program|adjust my program|switch my program/.test(t)) {
     const weeks = parseWeeks(t.replace(/twelve/, '12').replace(/eight/, '8').replace(/six/, '6').replace(/four/, '4'))
     return { kind: 'create_program', weeks, goalType: parseGoalType(t), daysPerWeek: parseDaysPerWeek(t) }
   }
   if (/\b(cancel|stop|end|delete|drop)\b.*\bprogram/.test(t) || /\bprogram\b.*\b(cancel|stop)/.test(t)) return { kind: 'cancel_program' }
-  if (/(show|open|view|see|where is|what'?s)\b.*\bprogram/.test(t) || /^my program/.test(t)) return { kind: 'show_program' }
+  if (/(show|open|view|see|where is|what'?s)\b.*\bprogram/.test(t) || /^my program/.test(t) || /^show me week \d/.test(t)) return { kind: 'show_program' }
+  if (/(show|open|view|see)\b.*\b(calendar|schedule|my week)\b/.test(t) || /^(calendar|my calendar|my schedule)$/.test(t)) return { kind: 'show_calendar' }
 
   // ---- Calendar
   const move = t.match(/\b(move|switch|swap|reschedule|shift|change)\b.*?\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b.*?\b(?:to|for|→|->)\s*\b(mon|tue|wed|thu|fri|sat|sun|tomorrow|today)[a-z]*/)
@@ -251,11 +292,12 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
 
   // ---- Progress
   if (/\b(why|what).*\b(weight|scale)\b.*\b(stopped|stuck|stall|plateau|not moving|isn'?t moving|won'?t move|same)\b/.test(t) || /plateau/.test(t)) return { kind: 'weight_stalled' }
-  if (/\b(analy[sz]e|review|how am i doing|how'?s my|assess|check|look at)\b.*\b(progress|numbers|stats|results|going)\b/.test(t) || /^(progress|my progress|how am i doing|am i progressing|am i making progress)/.test(t)) return { kind: 'analyze_progress' }
+  if (/\b(analy[sz]e|review|how am i doing|how'?s my|assess|check|look at)\b.*\b(progress|numbers|stats|results|going)\b/.test(t) || /^(progress|my progress|how am i doing|am i progressing|am i making progress)/.test(t) || /how (did|have) i (do|done|been doing)|how was my (week|month)|how did that session go/.test(t)) return { kind: 'analyze_progress' }
 
   // ---- Nutrition
+  if (/\b(what should i order|what to order|order|menu)\b/.test(t) && !/program/.test(t)) return { kind: 'order_advice' }
   if (/\b(restaurant|eating out|dinner out|going out for (dinner|food)|takeaway|take-out|takeout|party|wedding|birthday dinner)\b/.test(t)) return { kind: 'restaurant' }
-  if (/\b(eat|food|meal|meals|nutrition|diet|calories|macros|protein|breakfast|lunch|dinner|snack|hungry|cook)\b/.test(t)) {
+  if (/\b(eat|food|meal|meals|nutrition|diet|calories|macros|protein|carbs?|breakfast|lunch|dinner|snack|hungry|cook)\b/.test(t)) {
     const slot = /breakfast/.test(t) ? 'breakfast' : /lunch/.test(t) ? 'lunch' : /dinner|tonight|evening/.test(t) ? 'dinner' : /snack/.test(t) ? 'snack' : undefined
     return { kind: 'nutrition', slot, lowerCarb: /low[- ]?carb|less carbs|fewer carbs/.test(t) }
   }
@@ -292,6 +334,7 @@ export function parseIntent(raw: string, opts: { expects?: ExpectSlot; topic?: s
     return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
   }
   if (/^(workout|make my workout|today'?s workout|build my workout|build today'?s workout)$/.test(t)) return { kind: 'make_workout', constraints: {} }
+  if (/\b(plan|build|prep|prepare|set up)\b.*\btomorrow\b|^plan tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'make_workout', constraints: { forDate: 'tomorrow' } }
   if (/\b(i )?only have (\d+)|\bi have (\d+) ?min|\b(\d+) ?min(ute)?s? (today|only)|got (\d+) ?min/.test(t)) return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
   if (/\b(i )?only have (dumbbells?|bands?|a kettlebell|bodyweight)|\bno gym\b|\bat home today\b|\bhotel gym\b/.test(t)) return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
 

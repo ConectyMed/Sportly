@@ -85,6 +85,34 @@ describe('intents', () => {
     expect(parseIntent('I weighed 74.5 kg this morning', {})).toMatchObject({ kind: 'log_weight', kg: 74.5 })
     expect(parseIntent('My goal is to bench 100 kg', {})).toMatchObject({ kind: 'set_goal', metric: 'bench_press', target: 100 })
     expect(parseIntent('Start workout', {}).kind).toBe('start_workout')
+    expect(parseIntent('Plan tomorrow', {})).toMatchObject({ kind: 'make_workout', constraints: { forDate: 'tomorrow' } })
+    expect(parseIntent('Show my calendar', {}).kind).toBe('show_calendar')
+    expect(parseIntent('Show me week 1', {}).kind).toBe('show_program')
+    expect(parseIntent('Log my weight', {}).kind).toBe('log_weight_prompt')
+    expect(parseIntent('74.4', { expects: 'weight_value' })).toMatchObject({ kind: 'log_weight', kg: 74.4 })
+    expect(parseIntent('How did I do this week?', {}).kind).toBe('analyze_progress')
+    expect(parseIntent('What should I order?', {}).kind).toBe('order_advice')
+    expect(parseIntent('Rebuild my program around fat loss', {})).toMatchObject({ kind: 'create_program', goalType: 'lose_fat' })
+    expect(parseIntent('Change my program to 3 days a week', {})).toMatchObject({ kind: 'create_program', daysPerWeek: 3 })
+    expect(parseIntent('Bench 100 kg', { expects: 'goal_choice' })).toMatchObject({ kind: 'set_goal', metric: 'bench_press', target: 100 })
+    expect(parseIntent('Build muscle', { expects: 'goal_choice' })).toMatchObject({ kind: 'set_goal', goalType: 'build_muscle' })
+    expect(parseIntent('Chicken, rice and veg', { expects: 'meal_description' }).kind).toBe('meal_description')
+    expect(parseIntent('Dumbbells and a bench', { expects: 'equipment_list' })).toMatchObject({ kind: 'equipment_list', equipment: ['dumbbell', 'bench'] })
+    expect(parseIntent('Skip today', {}).kind).toBe('skip_workout')
+    expect(parseIntent('Set a new goal', {}).kind).toBe('set_goal')
+  })
+
+  it('every suggestion chip the coach offers resolves to a real intent', async () => {
+    const provider = new LocalCoachProvider()
+    const c = ctx()
+    const prompts = ['Make my workout', "I'm tired", 'Create me a 12-week muscle-building program', "I'm eating at a restaurant tonight", 'Analyze my progress', 'Plan my week', 'What should I eat today?']
+    for (const p of prompts) {
+      const r = await provider.respond({ text: p, attachments: [], context: c })
+      for (const s of r.suggestions ?? []) {
+        const next = parseIntent(s, { expects: r.expects, topic: r.contextPatch?.topic, hasWorkout: true })
+        expect(next.kind, `"${s}" after "${p}"`).not.toBe('unknown')
+      }
+    }
   })
 })
 

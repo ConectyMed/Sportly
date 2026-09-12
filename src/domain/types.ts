@@ -190,6 +190,12 @@ export type ExpectSlot =
   | 'pain_location'
   | 'reschedule_day'
   | 'attachment_kind'
+  | 'weight_value'
+  | 'goal_choice'
+  | 'meal_description'
+  | 'bloodwork_flag'
+  | 'equipment_list'
+  | 'plan_choice'
 
 export interface Conversation {
   id: string

@@ -174,7 +174,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           text: voice.compose({ core: `Good. I logged high energy and added a little to today's compounds.`, reason: 'Days like this are where progress gets made, so we use them.', push: 'Go earn it.', calm: 'Use it well.' }),
           cards: [workoutCard(harder)],
           actions,
-          suggestions: ['Start it', 'Keep the original', 'What should I eat?'],
+          suggestions: ['Start it', 'Make it lighter', 'What should I eat?'],
           contextPatch: withWorkoutContext(harder),
         }
       }
@@ -216,11 +216,13 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           status: 'Adjusting your workout',
         }
       }
+      // An explicit request for a workout gets a real session even on a low-readiness day (kept light).
+      const readinessForGen = date === today ? (ctx.readiness.recommendation === 'rest' ? { ...ctx.readiness, recommendation: 'lighter' as const } : ctx.readiness) : undefined
       const gen = generateWorkout({
         user: ctx.user,
         goals: ctx.goals,
         history: ctx.workouts,
-        readiness: date === today ? ctx.readiness : undefined,
+        readiness: readinessForGen,
         constraints,
         date,
         seed: `${date}-${ctx.workouts.length}-${JSON.stringify(constraints)}`,
@@ -295,7 +297,9 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
     }
 
     case 'create_program': {
-      if (!intent.weeks) {
+      // Adjusting an existing program ("3 days a week", "around fat loss") keeps its length.
+      const weeks = intent.weeks ?? (ctx.activeProgram && (intent.daysPerWeek || intent.goalType) ? ctx.activeProgram.weeks : undefined)
+      if (!weeks) {
         return {
           text: voice.compose({ core: 'How long do you want the program to run?', reason: 'Eight weeks is a good first block. Twelve lets me build in two deloads.', soft: 'Your call,' }),
           expects: 'program_weeks',
@@ -304,7 +308,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           thinkMs: 400,
         }
       }
-      const program = generateProgram({ user: ctx.user, goals: ctx.goals, history: ctx.workouts, weeks: intent.weeks, daysPerWeek: intent.daysPerWeek, goalType: intent.goalType })
+      const program = generateProgram({ user: ctx.user, goals: ctx.goals, history: ctx.workouts, weeks, daysPerWeek: intent.daysPerWeek, goalType: intent.goalType })
       const { workouts, events } = materializeProgram(program, ctx.user, ctx.goals, ctx.workouts)
       const replacing = ctx.activeProgram
       return {
@@ -318,7 +322,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         }),
         cards: [{ id: uid('card'), type: 'program', refId: program.id, title: program.name, subtitle: `${program.weeks} weeks · ${program.daysPerWeek} days/week` }],
         actions: [{ type: 'create_program', program, workouts, events, replaceProgramId: replacing?.id }],
-        suggestions: ['Show me week 1', 'Add to my calendar', 'What should I eat on training days?'],
+        suggestions: ['Show me week 1', 'Show my calendar', 'What should I eat on training days?'],
         contextPatch: { lastProgramId: program.id, topic: 'program' },
         status: 'Designing your program',
         thinkMs: 2200,
@@ -380,7 +384,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         }),
         cards: [{ id: uid('card'), type: 'nutrition', refId: plan.id, title: 'Adjusted for tonight', subtitle: `${plan.calories.toLocaleString()} kcal · restaurant dinner` }],
         actions: [{ type: 'create_nutrition_plan', plan }, { type: 'remember', item: { category: 'habit', text: `Ate out on ${weekdayName(ctx.now)} (${formatShortDate(ctx.now)})`, source: 'conversation' } }],
-        suggestions: ['What should I order?', 'Back to my normal plan tomorrow'],
+        suggestions: ['What should I order?', 'Plan tomorrow’s meals'],
         contextPatch: { lastNutritionPlanId: plan.id, topic: 'nutrition' },
         status: 'Adjusting your day',
         thinkMs: 1100,
@@ -493,6 +497,15 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
 
     case 'set_goal': {
       const existingPrimary = ctx.goals.find((g) => g.rank === 'primary')
+      if (!intent.goalType && !intent.metric && !intent.target) {
+        return {
+          text: voice.compose({ core: 'What do you want to work toward?', reason: 'A direction (build muscle, lose fat, get stronger) or a number (a body weight, a lift, sessions per week). Both is best.' }),
+          expects: 'goal_choice',
+          suggestions: ['Build muscle', 'Lose fat', 'Bench 100 kg', '4 workouts a week'],
+          contextPatch: { topic: 'goal' },
+          thinkMs: 300,
+        }
+      }
       const type = intent.goalType ?? existingPrimary?.type ?? 'general_fitness'
       const metric = intent.metric
       if (metric && !intent.target) {
@@ -615,6 +628,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           text: voice.compose({ core: `Got your voice note${a.durationSec ? ` (${Math.round(a.durationSec)}s)` : ''}. I have saved it with today. Transcription is not connected on this device yet, so give me the gist in a line and I will act on it.`, soft: 'When you get a second,' }),
           cards,
           suggestions: ['It was about today’s workout', 'It was about food', 'Never mind'],
+          expects: 'attachment_kind',
         }
       }
       if (kinds.has('image')) {
@@ -658,6 +672,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
             text: voice.compose({ core: `Thanks. I have logged it against today${plan ? ` (${plan.calories.toLocaleString()} kcal target)` : ''}. Give me a rough description of what was on the plate and I will estimate protein and calories and adjust the rest of your day.`, reason: 'Estimates from a description are usually within 15%, which is plenty for this.', quip: 'Camera eats first. Coach estimates second.' }),
             actions: [remember(`Shared a meal photo on ${formatShortDate(ctx.now)}`, 'nutrition')],
             suggestions: ['Chicken, rice and veg', 'Pasta with salmon', 'A big salad'],
+            expects: 'meal_description',
             contextPatch: { topic: 'nutrition' },
           }
         }
@@ -665,6 +680,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           return {
             text: voice.compose({ core: 'Useful. Tell me what you see there in a few words (for example “dumbbells to 30 kg, a bench and bands”) and I will save it as your available equipment and build around it.', soft: 'Quick one:' }),
             suggestions: ['Dumbbells and a bench', 'Full gym', 'Just bands and bodyweight'],
+            expects: 'equipment_list',
             actions: [remember(`Shared a photo of their training space on ${formatShortDate(ctx.now)}`, 'equipment')],
             contextPatch: { topic: 'workout' },
           }
@@ -673,7 +689,8 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
           return {
             text: voice.compose({ core: 'Got it, a training plan. I have kept it with your history. Do you want me to follow it as-is, blend it with your goals, or use it as a reference only?', reason: 'If you follow it, I will schedule it in your calendar and track the loads for you.' }),
             actions: [remember(`Uploaded an external training plan on ${formatShortDate(ctx.now)}`, 'history')],
-            suggestions: ['Blend it with my goals', 'Reference only', 'Create a program instead'],
+            suggestions: ['Blend it with my goals', 'Reference only', 'Follow it as-is'],
+            expects: 'plan_choice',
             contextPatch: { topic: 'program' },
           }
         }
@@ -690,10 +707,97 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
             text: voice.compose({ core: 'Thanks for sharing it. I have saved it, but I will not interpret medical results, that is for your doctor. If they have flagged anything (iron, vitamin D, cholesterol), tell me and I will adjust nutrition and training sensibly around it.', soft: 'To be clear,' }),
             actions: [remember(`Shared bloodwork on ${formatShortDate(ctx.now)}`, 'health')],
             suggestions: ['Low vitamin D', 'Low iron', 'All normal'],
+            expects: 'bloodwork_flag',
           }
         }
         default:
           return { text: voice.compose({ core: 'Saved. If it matters for training or food, tell me how and I will use it.' }), suggestions: ['Build today’s workout'] }
+      }
+    }
+
+    case 'show_calendar': {
+      const start = ctx.now
+      const week = Array.from({ length: 7 }, (_, i) => dayKey(addDays(start, i)))
+      const evs = ctx.events.filter((e) => week.includes(e.date) && e.type === 'workout' && e.status !== 'skipped').sort((a, b) => a.date.localeCompare(b.date))
+      if (!evs.length) return { text: voice.compose({ core: 'Nothing is on your calendar for the next seven days. Want me to plan the week?' }), suggestions: ['Plan my week', 'Create a 12-week program'], contextPatch: { topic: 'calendar' } }
+      return {
+        text: voice.compose({ core: `Next seven days: ${evs.map((e) => `${weekdayName(fromDayKey(e.date), true)} ${e.title}`).join(' · ')}.`, reason: 'Tell me to move any of them and I will keep the spacing sensible.' }),
+        cards: [{ id: uid('card'), type: 'calendar', title: 'Next 7 days', subtitle: `${plural(evs.length, 'session')}`, data: { days: evs.map((e) => ({ date: e.date, title: e.title })) } }],
+        suggestions: ['Move Monday to Wednesday', 'Plan my week'],
+        contextPatch: { topic: 'calendar' },
+        thinkMs: 500,
+      }
+    }
+
+    case 'log_weight_prompt':
+      return { text: voice.compose({ core: 'What did the scale say this morning?', soft: 'Whenever you have it,' }), expects: 'weight_value', suggestions: [`${round(ctx.user.weightKg - 0.3, 1)} kg`, `${ctx.user.weightKg} kg`, `${round(ctx.user.weightKg + 0.3, 1)} kg`], thinkMs: 300 }
+
+    case 'order_advice': {
+      const wantsLoss = goal === 'lose_fat'
+      return {
+        text: voice.compose({
+          core: `Order a protein main first: grilled fish, steak, chicken or tofu. Add a vegetable side. ${wantsLoss ? 'Skip the second starch and keep drinks to one.' : 'Have the starch, you are training hard.'} Then pick the one indulgence you actually want.`,
+          reason: 'A restaurant meal is a protein problem, not a calorie problem. Solve protein and the rest sorts itself out.',
+          quip: 'Dessert is a valid choice. Two desserts is a cry for help.',
+        }),
+        suggestions: ['Plan tomorrow’s meals', 'What should I do tomorrow?'],
+        contextPatch: { topic: 'nutrition' },
+        thinkMs: 500,
+      }
+    }
+
+    case 'meal_description': {
+      const est = estimateMeal(intent.text)
+      return {
+        text: voice.compose({ core: `Roughly ${est.kcal} kcal with about ${est.protein} g protein. ${ctx.todayNutrition ? `That leaves around ${Math.max(0, ctx.todayNutrition.calories - est.kcal).toLocaleString()} kcal for the rest of today.` : 'Logged against today.'}`, reason: est.note, calm: 'Good enough is the goal.', push: 'Protein handled. Keep going.' }),
+        actions: [{ type: 'remember', item: { category: 'nutrition', text: `Ate ${intent.text.toLowerCase()} on ${formatShortDate(ctx.now)} (~${est.kcal} kcal)`, source: 'conversation' } }],
+        suggestions: ['What should I eat tonight?', 'Analyze my progress'],
+        contextPatch: { topic: 'nutrition' },
+        thinkMs: 800,
+      }
+    }
+
+    case 'bloodwork_flag': {
+      const t = intent.text.toLowerCase()
+      const normal = /normal|fine|all good|nothing/.test(t)
+      const advice = /vitamin d/.test(t)
+        ? 'Low vitamin D usually means a supplement your doctor sizes for you, plus daylight when you can. Training-wise nothing changes, but recovery often improves once it is corrected.'
+        : /iron|ferritin/.test(t)
+          ? 'Low iron blunts endurance and recovery. I will keep conditioning moderate for a few weeks and lean meals toward iron-rich foods: red meat, lentils, spinach with something acidic. Follow your doctor on supplements.'
+          : /cholesterol|lipid/.test(t)
+            ? 'For lipids, consistent training already helps. I will nudge meals toward fibre, oily fish and olive oil, and keep an eye on saturated fat.'
+            : normal
+              ? 'Good news. Nothing to adjust, so we keep training as planned.'
+              : 'Noted. If your doctor gave you specific guidance, tell me and I will fit training and food around it.'
+      return {
+        text: voice.compose({ core: advice, soft: 'To be clear, this is coaching, not medical advice.' }),
+        actions: normal ? [] : [{ type: 'remember', item: { category: 'health', text: `Bloodwork flag: ${intent.text}`, source: 'conversation' } }],
+        suggestions: ['What should I eat today?', 'Build today’s workout'],
+      }
+    }
+
+    case 'equipment_list': {
+      const merged = [...new Set([...intent.equipment, 'bodyweight' as const])]
+      return {
+        text: voice.compose({ core: `Saved: ${intent.equipment.map((e) => EQUIPMENT_LABELS[e].toLowerCase()).join(', ')}. Every workout from now on is built around that.`, push: 'Simple setup, serious results.', calm: 'That is plenty to work with.' }),
+        actions: [{ type: 'update_user', patch: { equipment: merged } }, { type: 'remember', item: { category: 'equipment', text: `Available equipment: ${intent.equipment.map((e) => EQUIPMENT_LABELS[e].toLowerCase()).join(', ')}`, source: 'conversation' } }],
+        suggestions: ['Build today’s workout', 'Plan my week'],
+        contextPatch: { topic: 'workout' },
+      }
+    }
+
+    case 'plan_choice': {
+      if (intent.choice === 'reference') return { text: voice.compose({ core: 'Kept as reference only. I will keep building your sessions around your goals and recovery.' }), suggestions: ['Build today’s workout'] }
+      const program = generateProgram({ user: ctx.user, goals: ctx.goals, history: ctx.workouts, weeks: 8, name: intent.choice === 'follow' ? '8-Week Uploaded Plan' : undefined })
+      const { workouts, events } = materializeProgram(program, ctx.user, ctx.goals, ctx.workouts)
+      return {
+        text: voice.compose({ core: `${intent.choice === 'follow' ? 'Scheduled it as an 8-week block' : 'Blended it into an 8-week block around your goals'}: ${program.daysPerWeek} days a week, starting ${formatShortDate(fromDayKey(program.startDate))}. It is on your calendar.`, reason: 'I match loads to your history and adjust each session to how you recover.' }),
+        cards: [{ id: uid('card'), type: 'program', refId: program.id, title: program.name, subtitle: `${program.weeks} weeks · ${program.daysPerWeek} days/week` }],
+        actions: [{ type: 'create_program', program, workouts, events, replaceProgramId: ctx.activeProgram?.id }],
+        suggestions: ['Show me week 1', 'Show my calendar'],
+        contextPatch: { lastProgramId: program.id, topic: 'program' },
+        status: 'Building your program',
+        thinkMs: 1800,
       }
     }
 
@@ -758,7 +862,7 @@ function handleFatigue(scale: number, ctx: CoachContext, voice: Voice): CoachRep
       text: voice.compose({ core: `${scale} out of 10. That is a recovery day, not a training day. I swapped today for a 20-minute mobility flow; do that, eat properly, and get to bed early.`, reason: 'Training hard at this level of fatigue mostly adds stress without adding progress.', soft: 'Honestly,', calm: 'This is the plan working, not the plan failing.', push: 'Recover hard today, hit it tomorrow.' }),
       cards: [workoutCard(rest)],
       actions: [...actions, { type: 'create_workout', workout: rest, replaceWorkoutId: w?.status === 'planned' ? w.id : undefined }],
-      suggestions: ['Start the flow', 'Skip entirely', 'What should I eat?'],
+      suggestions: ['Start the flow', 'Skip today', 'What should I eat?'],
       contextPatch: { lastWorkoutId: rest.id, topic: 'recovery' },
       status: 'Adjusting your day',
     }
@@ -923,6 +1027,47 @@ function nextWeekdayIncludingPast(weekday: number, from: Date): Date {
   // Prefer a date this week (Mon..Sun); fall back to next occurrence.
   const d = nextWeekday(weekday, from, true)
   return d
+}
+
+/** Rough meal estimate from a free-text description. Deliberately simple and transparent. */
+function estimateMeal(text: string): { kcal: number; protein: number; note: string } {
+  const t = text.toLowerCase()
+  const items: Array<[RegExp, number, number]> = [
+    [/chicken|turkey/, 280, 45],
+    [/beef|steak|mince/, 380, 40],
+    [/salmon|tuna|fish|prawn|shrimp/, 300, 35],
+    [/egg/, 160, 13],
+    [/tofu|tempeh/, 220, 22],
+    [/lentil|beans|chickpea/, 230, 14],
+    [/rice|quinoa|couscous/, 260, 5],
+    [/pasta|noodle|spaghetti/, 380, 12],
+    [/potato|fries|chips/, 300, 5],
+    [/bread|toast|wrap|tortilla|bun|pizza/, 250, 8],
+    [/salad|veg|vegetable|broccoli|spinach|greens/, 80, 3],
+    [/cheese|halloumi|paneer/, 200, 12],
+    [/yogurt|yoghurt|skyr/, 150, 15],
+    [/oats|granola|cereal/, 300, 8],
+    [/avocado|olive|nuts|peanut/, 180, 4],
+    [/sauce|dressing|mayo|butter|cream/, 120, 1],
+    [/dessert|cake|ice cream|chocolate|cookie/, 350, 4],
+    [/beer|wine|cocktail/, 180, 0],
+  ]
+  let kcal = 0
+  let protein = 0
+  let hits = 0
+  for (const [re, k, p] of items) {
+    if (re.test(t)) {
+      kcal += k
+      protein += p
+      hits++
+    }
+  }
+  if (!hits) return { kcal: 550, protein: 25, note: 'A typical mixed plate. Tell me the main ingredient and I can tighten this.' }
+  if (/big|large|double|huge/.test(t)) {
+    kcal = Math.round(kcal * 1.3)
+    protein = Math.round(protein * 1.3)
+  }
+  return { kcal: Math.round(kcal / 10) * 10, protein, note: protein >= 30 ? 'Solid protein hit. Nothing to change.' : 'A little light on protein; add a shake or some yogurt later if you can.' }
 }
 
 function categorize(text: string): MemoryItem['category'] {

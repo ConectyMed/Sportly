@@ -53,8 +53,12 @@ export function LineChart({
   const { path, area, pts, min, max } = useMemo(() => {
     if (!data.length) return { path: '', area: '', pts: [] as Array<{ x: number; y: number }>, min: 0, max: 1 }
     const values = data.map((d) => d.value)
-    let min = Math.min(...values, target ?? Infinity)
-    let max = Math.max(...values, target ?? -Infinity)
+    const dMin = Math.min(...values)
+    const dMax = Math.max(...values)
+    // Only stretch the axis to a goal that is reasonably close; a far goal is labelled instead.
+    const near = target !== undefined && target >= dMin - 3 && target <= dMax + 3
+    let min = Math.min(dMin, near ? target! : Infinity)
+    let max = Math.max(dMax, near ? target! : -Infinity)
     if (max - min < yMinPad * 2) {
       const mid = (max + min) / 2
       min = mid - yMinPad
@@ -73,10 +77,16 @@ export function LineChart({
   if (!data.length) return null
   const last = pts[pts.length - 1]
   const active = hover ?? data.length - 1
-  const targetY = target !== undefined ? padTop + (1 - (target - min) / (max - min || 1)) * (height - padTop - padBottom) : undefined
+  const targetInRange = target !== undefined && target >= min && target <= max
+  const targetY = targetInRange ? padTop + (1 - (target! - min) / (max - min || 1)) * (height - padTop - padBottom) : undefined
 
   return (
     <div className={cn('relative w-full', className)}>
+      {target !== undefined && !targetInRange && (
+        <div className="absolute right-0 top-0 text-[11px] text-text-3 pointer-events-none">
+          Goal {formatValue(target)} {target > max ? '↑' : '↓'}
+        </div>
+      )}
       <svg
         viewBox={`0 0 ${w} ${height}`}
         className="w-full h-auto overflow-visible"

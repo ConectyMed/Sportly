@@ -19,7 +19,7 @@ export function Page({ title, eyebrow, back, right, children, className, large, 
   const navigate = useNavigate()
   return (
     <div className={cn('flex flex-col min-h-full', className)}>
-      {(title || back || right) && (
+      {(back || right || (title && !large)) && (
         <header className={cn('pt-safe sticky top-0 z-30 blur-bar', large ? 'bg-transparent' : 'border-b border-hairline')} style={{ background: large ? undefined : 'var(--tabbar-bg)' }}>
           <div className={cn('flex items-center gap-2 px-4', large ? 'h-14' : 'h-14')}>
             {back && (
@@ -39,7 +39,7 @@ export function Page({ title, eyebrow, back, right, children, className, large, 
         </header>
       )}
       {large && (
-        <div className="px-5 pt-1 pb-2">
+        <div className={cn('px-5 pb-2', back || right ? 'pt-1' : 'pt-[calc(env(safe-area-inset-top)+20px)]')}>
           {eyebrow && <div className="label mb-1.5">{eyebrow}</div>}
           <h1 className="display text-[30px]">{title}</h1>
         </div>

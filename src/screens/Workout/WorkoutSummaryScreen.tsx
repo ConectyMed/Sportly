@@ -63,7 +63,7 @@ export function WorkoutSummaryScreen() {
 
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }} className="grid grid-cols-3 gap-3 mt-8">
           <Stat label="Time" value={formatMinutes(Math.max(1, Math.round(summary.durationSec / 60)))} />
-          <Stat label="Volume" value={`${Math.round(summary.totalVolumeKg).toLocaleString()}`} unit="kg" />
+          {summary.totalVolumeKg > 0 ? <Stat label="Volume" value={`${Math.round(summary.totalVolumeKg).toLocaleString()}`} unit="kg" /> : <Stat label="Exercises" value={`${summary.exercisesCompleted}`} unit={`/ ${workout.exercises.length}`} />}
           <Stat label="Sets" value={`${summary.setsCompleted}`} unit={`/ ${summary.setsPlanned}`} />
         </motion.div>
 

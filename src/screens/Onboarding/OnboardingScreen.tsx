@@ -230,7 +230,7 @@ export function OnboardingScreen() {
                   <Row label="Weight">
                     <Stepper value={d.weightKg} min={35} max={250} step={0.5} unit="kg" format={(v) => v.toFixed(1)} onChange={(v) => patch({ weightKg: v })} />
                   </Row>
-                  <Row label="Body">
+                  <Row label="Sex">
                     <div className="flex gap-2">
                       {(['male', 'female', 'unspecified'] as const).map((s) => (
                         <Chip key={s} size="sm" selected={d.sex === s} onClick={() => patch({ sex: s })}>
