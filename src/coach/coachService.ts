@@ -371,7 +371,7 @@ export function runNotificationSweep(): void {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     for (const n of fresh) {
       try {
-        new Notification(n.title, { body: n.body, icon: '/icons/icon-192.png', tag: n.id })
+        new Notification(n.title, { body: n.body, icon: `${import.meta.env.BASE_URL}icons/icon-192.png`, tag: n.id })
       } catch {
         /* not supported in this context */
       }
