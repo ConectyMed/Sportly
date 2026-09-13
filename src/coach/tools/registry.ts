@@ -1,7 +1,8 @@
 import type { ActionRecord } from '@/domain/types'
 import { hashString, uid } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
-import type { CoachAction, CoachActionType } from '../provider'
+import { toolDefinitions } from '../model/toolDefinitions'
+import type { CoachAction } from '../provider'
 import { runAction, type ActionData } from './actionTools'
 import type { ToolDescriptor, ToolResult } from './contracts'
 import { runRead, type ReadOutputs, type ReadQuery } from './readTools'
@@ -20,6 +21,10 @@ export interface ExecuteOptions {
   source?: ActionRecord['source']
   /** Window in ms during which an identical call is treated as a repeat. */
   repeatWindowMs?: number
+  /** Provenance when the call comes from the model loop. */
+  toolCallId?: string
+  via?: string
+  arguments?: Record<string, unknown>
 }
 
 interface LedgerEntry {
@@ -35,7 +40,7 @@ export function actionKey(action: CoachAction): string {
   switch (action.type) {
     case 'create_workout':
     case 'update_workout':
-      return `${action.type}:${action.workout.id}:${hashString(JSON.stringify(action.workout.exercises.map((e) => [e.exerciseId, e.sets.length])))}`
+      return `${action.type}:${action.workout.id}:${hashString(JSON.stringify([action.workout.estimatedMinutes, action.workout.scheduledFor, action.workout.exercises.map((e) => [e.exerciseId, e.sets.map((x) => [x.targetReps, x.targetWeightKg, x.targetSeconds])])]))}`
     case 'skip_workout':
     case 'remove_workout':
     case 'complete_workout':
@@ -73,26 +78,37 @@ export function actionKey(action: CoachAction): string {
   }
 }
 
-function recordOf(action: CoachAction, result: ToolResult<ActionData>, source: ActionRecord['source']): ActionRecord {
-  const base = { id: uid('act'), tool: action.type, source, at: new Date().toISOString() }
+function provenance(opts: ExecuteOptions): Pick<ActionRecord, 'toolCallId' | 'via' | 'arguments'> {
+  const out: Pick<ActionRecord, 'toolCallId' | 'via' | 'arguments'> = {}
+  if (opts.toolCallId) out.toolCallId = opts.toolCallId
+  if (opts.via) out.via = opts.via
+  if (opts.arguments && Object.keys(opts.arguments).length) {
+    // Keep the audit log small: arguments are capped, never secrets (tools never receive keys).
+    const json = JSON.stringify(opts.arguments)
+    out.arguments = json.length > 2_000 ? { truncated: json.slice(0, 2_000) } : opts.arguments
+  }
+  return out
+}
+
+function recordOf(action: CoachAction, result: ToolResult<ActionData>, opts: ExecuteOptions): ActionRecord {
+  const base = { id: uid('act'), tool: action.type, source: opts.source ?? 'coach', at: new Date().toISOString(), ...provenance(opts) }
   if (result.ok) return { ...base, ok: true, summary: result.data.summary, changes: result.changes, idempotent: result.idempotent }
   return { ...base, ok: false, summary: result.error.message, changes: [], error: result.error.code }
 }
 
 /** Execute one action through validation, idempotency and audit. Never throws. */
 export function executeAction(action: CoachAction, opts: ExecuteOptions = {}): ActionRecord {
-  const source = opts.source ?? 'coach'
   const key = actionKey(action)
   const now = Date.now()
   const window = opts.repeatWindowMs ?? DEFAULT_WINDOW
   const seen = ledger.get(key)
   if (seen && now - seen.at < window && seen.record.ok) {
-    const repeat: ActionRecord = { ...seen.record, id: uid('act'), at: new Date().toISOString(), idempotent: true, changes: [] }
+    const repeat: ActionRecord = { ...seen.record, id: uid('act'), at: new Date().toISOString(), idempotent: true, changes: [], ...provenance(opts) }
     useStore.getState().appendActionLog(repeat)
     return repeat
   }
   const result = runAction(action)
-  const record = recordOf(action, result, source)
+  const record = recordOf(action, result, opts)
   ledger.set(key, { at: now, record })
   if (ledger.size > 200) {
     for (const [k, v] of ledger) if (now - v.at > window) ledger.delete(k)
@@ -119,61 +135,11 @@ export function resetActionLedger(): void {
 
 /* ------------------------------------------------------------------ Descriptions for a model */
 
-const ACTION_DESCRIPTORS: Record<CoachActionType, Omit<ToolDescriptor, 'name' | 'kind'>> = {
-  create_workout: { description: 'Plan a workout for a date. Replaces any other planned coach workout on that day.', input: { workout: 'Workout', replaceWorkoutId: 'string?' } },
-  update_workout: { description: 'Replace the content of an existing workout (exercises, sets, duration).', input: { workout: 'Workout' } },
-  skip_workout: { description: 'Mark a planned workout as skipped.', input: { workoutId: 'string' } },
-  remove_workout: { description: 'Delete a planned workout and its calendar entry.', input: { workoutId: 'string' } },
-  complete_workout: { description: 'Mark a workout as completed; remaining sets count as done. Updates history, calendar and progress.', input: { workoutId: 'string' } },
-  reschedule_workout: { description: 'Move a planned workout to another date.', input: { workoutId: 'string', toDate: 'YYYY-MM-DD' } },
-  create_program: { description: 'Create a multi-week program with its sessions and calendar entries.', input: { program: 'Program', workouts: 'Workout[]', events: 'CalendarEvent[]', replaceProgramId: 'string?' } },
-  cancel_program: { description: 'Cancel the active program and remove its future sessions.', input: { programId: 'string' } },
-  create_nutrition_plan: { description: 'Set the day’s nutrition targets and suggested meals.', input: { plan: 'NutritionPlan' } },
-  log_meal: { description: 'Add a meal (draft or logged) to the food journal.', input: { meal: 'LoggedMeal' } },
-  update_meal: { description: 'Change a meal’s items, portion, slot or status.', input: { meal: 'LoggedMeal' } },
-  delete_meal: { description: 'Remove a meal from the food journal.', input: { mealId: 'string' } },
-  remember: { description: 'Save a durable fact about the user. Contradicting older memories are replaced.', input: { item: { category: 'MemoryCategory', text: 'string', source: 'conversation|inferred|user' } } },
-  forget: { description: 'Delete a memory.', input: { memoryId: 'string' } },
-  set_goal: { description: 'Create or update a goal (type, rank, optional target).', input: { goal: 'Goal' } },
-  delete_goal: { description: 'Remove a goal.', input: { goalId: 'string' } },
-  check_in: { description: 'Update today’s readiness check-in (fatigue, energy, sleep, soreness).', input: { patch: { fatigue: '1-10?', energy: '1-10?', sleepHours: 'number?', soreness: '1-10?' } } },
-  move_event: { description: 'Move a calendar entry (and its workout) to another date.', input: { eventId: 'string', toDate: 'YYYY-MM-DD' } },
-  create_event: { description: 'Add a calendar entry.', input: { event: 'CalendarEvent' } },
-  update_event: { description: 'Change a calendar entry.', input: { eventId: 'string', patch: 'Partial<CalendarEvent>' } },
-  delete_event: { description: 'Remove a calendar entry (and its planned workout).', input: { eventId: 'string' } },
-  log_measurement: { description: 'Log a body measurement (weight, body fat, waist…).', input: { measurement: { type: 'MeasurementType', value: 'number', unit: 'string', date: 'YYYY-MM-DD' } } },
-  update_coach: { description: 'Change the coach’s name or personality dials.', input: { patch: 'Partial<CoachConfig>' } },
-  update_user: { description: 'Update profile fields (weight, equipment, diet, disliked exercises…).', input: { patch: 'Partial<UserProfile>' } },
-  update_availability: { description: 'Change the persistent training schedule.', input: { patch: { daysPerWeek: 'number?', preferredDays: 'number[]?', sessionMinutes: 'number?' } } },
-  notify: { description: 'Leave a note in the notification centre.', input: { title: 'string', body: 'string' } },
-}
-
-const READ_DESCRIPTORS: Array<{ name: ReadQuery['tool']; description: string; input: Record<string, unknown> }> = [
-  { name: 'get_user_context', description: 'The full structured picture of the user: profile, goals, training, readiness, nutrition, progress, calendar, program, memory, conversation.', input: {} },
-  { name: 'get_profile', description: 'Profile, equipment, availability and dietary preferences.', input: {} },
-  { name: 'get_goals', description: 'Primary and secondary goals with progress.', input: {} },
-  { name: 'get_goal', description: 'One goal by id, or the primary goal.', input: { goalId: 'string?' } },
-  { name: 'get_today', description: 'What was planned, what happened, what was eaten and readiness today.', input: {} },
-  { name: 'get_tomorrow', description: 'What is planned tomorrow and the targets.', input: {} },
-  { name: 'get_day', description: 'Summary for any date.', input: { date: 'YYYY-MM-DD' } },
-  { name: 'get_workout', description: 'A workout by id, or today’s / next planned one.', input: { workoutId: 'string?' } },
-  { name: 'get_recent_workouts', description: 'Most recent completed workouts.', input: { limit: 'number?' } },
-  { name: 'get_progress', description: 'Weight trend, consistency, weekly stats, personal records.', input: {} },
-  { name: 'get_nutrition', description: 'Targets, consumed, remaining and meals for a date.', input: { date: 'YYYY-MM-DD?' } },
-  { name: 'get_today_meals', description: 'Meals logged or drafted today.', input: {} },
-  { name: 'get_remaining_nutrition', description: 'What is left of today’s calories and macros.', input: {} },
-  { name: 'get_calendar', description: 'Calendar entries in a date range.', input: { from: 'YYYY-MM-DD?', to: 'YYYY-MM-DD?' } },
-  { name: 'get_program', description: 'The active program, current week and next sessions.', input: {} },
-  { name: 'get_memory', description: 'What the coach remembers, optionally by category.', input: { category: 'MemoryCategory?' } },
-  { name: 'get_preferences', description: 'App preferences, coach name and personality.', input: {} },
-  { name: 'get_readiness', description: 'Today’s readiness and check-in.', input: {} },
-  { name: 'search_knowledge', description: 'Search the coaching knowledge base.', input: { query: 'string', limit: 'number?' } },
-]
-
-/** Every tool a model could be offered, as plain data. */
+/**
+ * Every tool a model could be offered, as plain data. The definitions live in
+ * one place (src/coach/model/toolDefinitions.ts); this is the same list in the
+ * registry's descriptor shape.
+ */
 export function describeTools(): ToolDescriptor[] {
-  return [
-    ...READ_DESCRIPTORS.map((d) => ({ name: d.name, kind: 'read' as const, description: d.description, input: d.input })),
-    ...(Object.keys(ACTION_DESCRIPTORS) as CoachActionType[]).map((name) => ({ name, kind: 'action' as const, ...ACTION_DESCRIPTORS[name] })),
-  ]
+  return toolDefinitions().map((t) => ({ name: t.name, kind: t.kind, description: t.description, input: t.inputSchema as Record<string, unknown>, constraints: t.constraints }))
 }

@@ -97,11 +97,20 @@ export interface CoachPersonality {
 export interface CoachConfig {
   name: string
   personality: CoachPersonality
-  /** Which AI provider backs the coach. `local` needs no credentials. */
-  provider: 'local' | 'anthropic'
-  /** Optional user-supplied key, stored on-device only. Never bundled. */
+  /**
+   * Which engine backs the coach. `local` needs no credentials and is the
+   * default; the others need user-supplied settings and fall back to `local`
+   * while incomplete.
+   */
+  provider: 'local' | 'anthropic' | 'openai' | 'local_llm'
+  /** Optional user-supplied keys, stored on-device only. Never bundled. */
   anthropicApiKey?: string
   anthropicModel?: string
+  openaiApiKey?: string
+  openaiModel?: string
+  /** OpenAI-compatible local endpoint (Ollama, LM Studio…). */
+  localLlmUrl?: string
+  localLlmModel?: string
 }
 
 export type MemoryCategory =
@@ -194,6 +203,12 @@ export interface ActionRecord {
   idempotent?: boolean
   source: 'coach' | 'user' | 'system'
   at: ISODate
+  /** Model tool call that requested this action, when it came through the model loop. */
+  toolCallId?: string
+  /** Model-level tool name (e.g. plan_workout) that materialised this internal action. */
+  via?: string
+  /** Validated arguments the model sent (never secrets; tools receive only these). */
+  arguments?: Record<string, unknown>
 }
 
 export type AttachmentKind = 'image' | 'pdf' | 'document' | 'audio'

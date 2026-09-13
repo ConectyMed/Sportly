@@ -13,6 +13,7 @@ import { generateProgram, materializeProgram, programWeekFor } from './programGe
 import type { CoachAction, CoachContext, CoachProvider, CoachReply, CoachRequest } from './provider'
 import { computeReadiness } from './readiness'
 import { selectDaySummary } from './context'
+import { categorizeMemory } from './memory'
 import { labelForFrame, rangeFor } from './time'
 import { generateWorkout, primaryGoal, removeCardio, replaceExercise, restrictEquipment, scaleIntensity, shortenWorkout } from './workoutGenerator'
 
@@ -455,7 +456,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
     }
 
     case 'remember': {
-      const category = categorize(intent.text)
+      const category = categorizeMemory(intent.text)
       const item: Omit<MemoryItem, 'id' | 'createdAt'> = { category, text: capitalize(intent.text), source: 'conversation' }
       return {
         text: voice.compose({ core: `Noted: “${item.text}.” I will factor that in from now on.`, reason: category === 'health' ? 'I will avoid anything that aggravates it and flag when something might.' : undefined, calm: undefined, push: undefined, quip: 'Filed under things I actually remember.' }),
@@ -500,9 +501,10 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
     }
 
     case 'reschedule': {
-      const fromDate = intent.from !== undefined ? dayKey(nextWeekdayIncludingPast(intent.from, ctx.now)) : today
+      const discussed = intent.fromContext && ctx.contextWorkout && ctx.contextWorkout.status === 'planned' ? ctx.contextWorkout : undefined
+      const fromDate = discussed ? discussed.scheduledFor : intent.from !== undefined ? dayKey(nextWeekdayIncludingPast(intent.from, ctx.now)) : today
       const toDate = intent.toRelative === 'tomorrow' ? dayKey(addDays(ctx.now, 1)) : intent.toRelative === 'today' ? today : intent.to !== undefined ? dayKey(nextWeekday(intent.to, ctx.now, true)) : undefined
-      const ev = ctx.events.find((e) => e.type === 'workout' && e.date === fromDate && e.status === 'planned')
+      const ev = discussed ? ctx.events.find((e) => e.workoutId === discussed.id) : ctx.events.find((e) => e.type === 'workout' && e.date === fromDate && e.status === 'planned')
       if (!ev) {
         return { text: voice.compose({ core: `I do not see a planned workout on ${weekdayName(fromDayKey(fromDate))}. Want me to schedule one?` }), suggestions: ['Plan my week', 'Build today’s workout'] }
       }
@@ -535,10 +537,11 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         return { text: voice.compose({ core: `What number are we aiming for?`, reason: metric === 'body_weight' ? 'A target weight in kg.' : metric === 'workouts_per_week' ? 'Sessions per week.' : 'A target load in kg.' }), expects: 'goal_target', suggestions: metric === 'body_weight' ? [`${round(ctx.user.weightKg - 3)} kg`, `${round(ctx.user.weightKg + 3)} kg`] : ['4 per week', '100 kg'] }
       }
       const isMetricOnly = Boolean(metric) && !intent.goalType
+      // A change of primary goal updates the same goal in place (one primary, one id), never a second entity.
       const goalObj: Goal = {
-        id: isMetricOnly && existingPrimary ? existingPrimary.id : uid('goal'),
+        id: existingPrimary ? existingPrimary.id : uid('goal'),
         type,
-        rank: existingPrimary && !isMetricOnly ? 'primary' : existingPrimary ? existingPrimary.rank : 'primary',
+        rank: 'primary',
         label: GOAL_LABELS[type],
         metric,
         targetValue: intent.target,
@@ -1571,19 +1574,6 @@ function exerciseMatchesKeyword(exerciseId: string, name: string, key: string): 
 function parseMinutesLoose(text: string): number | undefined {
   const m = text.match(/(\d{1,3})\s*(?:min|mins|minutes)/i)
   return m ? Number(m[1]) : undefined
-}
-
-function categorize(text: string): MemoryItem['category'] {
-  const t = text.toLowerCase()
-  if (/goal|want to|aim/.test(t)) return 'goal'
-  if (/dumbbell|barbell|kettlebell|bands?|gym|equipment|bench|machine/.test(t)) return 'equipment'
-  if (/monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|evening|am\b|pm\b|o'?clock|schedule|available|busy/.test(t)) return 'availability'
-  if (/eat|food|vegan|vegetarian|allerg|lactose|gluten|protein|meal|snack|coffee|hate|love|dislike/.test(t)) return 'nutrition'
-  if (/knee|back|shoulder|injur|pain|hurt|surgery|asthma|condition|doctor|physio/.test(t)) return 'health'
-  if (/prefer|like|don'?t like|enjoy|favourite|favorite|hate/.test(t)) return 'preference'
-  if (/sleep|wake|walk|steps|habit|usually|always|never/.test(t)) return 'habit'
-  if (/talk|tone|direct|gentle|short|detailed|joke/.test(t)) return 'communication'
-  return 'note'
 }
 
 function exerciseTouches(exerciseId: string, area: string): boolean {

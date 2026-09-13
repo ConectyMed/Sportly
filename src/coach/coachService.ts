@@ -5,12 +5,14 @@ import { formatMinutes, sleep, uid } from '@/lib/utils'
 import { fileToDataUrl, loadAttachmentBlob } from '@/store/attachments'
 import { selectDailyNutrition } from '@/store/selectors'
 import { useStore, type AppState } from '@/store/useStore'
-import { AnthropicCoachProvider } from './anthropicProvider'
 import { buildContextSnapshot } from './context'
 import { AnthropicVisionFoodProvider, LocalFoodAnalysisProvider, type FoodAnalysis, type FoodAnalysisProvider } from './food/foodAnalysis'
 import { generateInsights } from './insights'
 import { splitCompound, type ParseOptions } from './intents'
 import { LocalCoachProvider } from './localProvider'
+import { ProviderError } from './model/contract'
+import { runModelTurn } from './model/loop'
+import { providerStatus, resolveModelProvider, type ProviderStatus } from './model/providers'
 import { generateNutritionPlan } from './nutritionGenerator'
 import { buildVoice } from './personality'
 import type { CoachAction, CoachContext, CoachProvider, CoachReply, CoachResponse } from './provider'
@@ -21,15 +23,16 @@ import { completeWorkoutRecord, ensureEventForWorkout } from './workoutCompletio
 import { generateWorkout } from './workoutGenerator'
 
 /**
- * Coach orchestration. One pipeline, whatever the provider:
+ * Coach orchestration. One pipeline, whatever the brain:
  *
- *   message → normalisation → (compound split) → context from live state
- *   → provider (understanding + proposed tool calls) → tool execution
- *   (validation, idempotency, audit) → derived state → context refresh
- *   → response that only claims what really happened.
+ *   message → normalisation → context from live state
+ *   → brain (built-in engine: intent → proposed actions | model: tool loop)
+ *   → tool execution (validation, idempotency, audit) → derived state
+ *   → context refresh → response that only claims what really happened.
  *
- * The provider never touches the store. A future model replaces only the
- * "understanding" step; everything else stays here.
+ * No brain touches the store. The built-in engine proposes typed actions that
+ * are executed here; a model proposes tool calls that the model loop
+ * (./model/loop.ts) validates, executes and feeds back until it is done.
  */
 
 const local = new LocalCoachProvider()
@@ -44,9 +47,13 @@ function hasVisionKey(state: Pick<AppState, 'coach'>): boolean {
   return state.coach.provider === 'anthropic' && Boolean(state.coach.anthropicApiKey)
 }
 
-function providerFor(state: AppState): CoachProvider {
-  if (hasVisionKey(state)) return new AnthropicCoachProvider(state.coach.anthropicApiKey!, state.coach.anthropicModel, local)
+function providerFor(): CoachProvider {
   return local
+}
+
+/** Which engine answers right now, and why (for the settings screen). */
+export function coachEngineStatus(state: Pick<AppState, 'coach'> = useStore.getState()): ProviderStatus {
+  return providerStatus(state.coach)
 }
 
 function foodProviderFor(state: AppState): FoodAnalysisProvider {
@@ -219,16 +226,38 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
 
   try {
     const state = useStore.getState()
-    const provider = providerFor(state)
     const started = Date.now()
     if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, hasVisionKey(state) ? 'Looking at your photo' : 'Reading your message')
     const foodAnalysis = await analyzeAttachedFood(state, trimmed, attachments)
 
+    // A configured model runs the tool loop; otherwise (or if it fails before doing anything) the built-in engine answers.
+    const model = await resolveModelProvider(state.coach)
+    if (model) {
+      try {
+        const turn = await runModelTurn(model, conversation.id, { text: trimmed, attachments, foodAnalysis }, { onStatus: (status) => useStore.getState().setCoachTyping(true, status) })
+        return commitReply(conversation.id, reconcile(turn.reply, turn.limitReached ? turn.records : []), turn.records)
+      } catch (err) {
+        const executed = useStore.getState().actionLog.filter((a) => a.source === 'coach' && Date.parse(a.at) >= started)
+        console.warn(`[coach] ${model.label} failed (${err instanceof ProviderError ? err.kind : 'error'}); ${executed.length ? 'reporting what was done' : 'using the built-in coach'}`, err)
+        if (executed.length) {
+          const voice = buildVoice(useStore.getState().coach.personality)
+          const done = executed.filter((a) => a.ok).map((a) => a.summary.replace(/\.$/, ''))
+          return commitReply(
+            conversation.id,
+            { text: voice.compose({ core: `${done.length ? `I did this: ${done.join('; ')}.` : 'I could not finish that.'} Then I lost ${model.label}, so nothing else was changed.`, soft: 'Heads up:' }), suggestions: ['Try again', 'What did I do today?'] },
+            executed.reverse(),
+          )
+        }
+        // Fall through to the built-in engine.
+      }
+    }
+
+    const provider = providerFor()
     // A message can carry several requests. Each one gets a fresh context so the
     // second request already sees what the first changed (goal → availability → program).
     const lastCoach = [...(state.messages[conversation.id] ?? [])].reverse().find((m) => m.role === 'coach')
     const parseOpts: ParseOptions = { expects: lastCoach?.expects, topic: conversation.context.topic, hasAttachments: attachments.length > 0 }
-    const parts = provider.id === 'local' && !attachments.length ? splitCompound(trimmed, parseOpts) : undefined
+    const parts = !attachments.length ? splitCompound(trimmed, parseOpts) : undefined
     const turns = parts?.map((p) => p.text) ?? [trimmed]
 
     const replies: CoachReply[] = []
@@ -245,8 +274,8 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
       thinkMs = Math.max(thinkMs, reply.thinkMs ?? 800)
     }
 
-    // Make the coach feel like it thinks — briefly, and only for the local engine.
-    const think = provider.id === 'local' && serviceOptions.simulateThinking ? thinkMs : 0
+    // Make the coach feel like it thinks — briefly, and only for the built-in engine.
+    const think = serviceOptions.simulateThinking ? thinkMs : 0
     const elapsed = Date.now() - started
     if (think > elapsed) await sleep(think - elapsed)
 

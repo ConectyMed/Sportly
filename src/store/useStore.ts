@@ -509,12 +509,20 @@ export const useStore = create<AppState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 3,
+      version: 4,
       migrate: (persisted) => {
-        // v1 → v2 added the food journal; v2 → v3 added the action audit log.
-        // Both are additive: older snapshots keep every entity they had.
+        // v1 → v2 added the food journal; v2 → v3 the action audit log; v3 → v4 the
+        // provider configuration (unknown providers fall back to the built-in coach).
+        // All additive: older snapshots keep every entity they had.
         const p = (persisted ?? {}) as Partial<AppState>
-        return { ...p, meals: p.meals ?? {}, actionLog: Array.isArray(p.actionLog) ? p.actionLog : [] } as AppState
+        const provider = p.coach?.provider
+        const known = provider === 'local' || provider === 'anthropic' || provider === 'openai' || provider === 'local_llm'
+        return {
+          ...p,
+          meals: p.meals ?? {},
+          actionLog: Array.isArray(p.actionLog) ? p.actionLog : [],
+          coach: p.coach ? { ...p.coach, provider: known ? provider : 'local' } : p.coach,
+        } as AppState
       },
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => {

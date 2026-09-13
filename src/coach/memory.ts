@@ -97,6 +97,20 @@ export function findConflictingMemories(memory: MemoryItem[], candidate: MemoryC
   })
 }
 
+/** Sportly, not the model, decides what kind of memory a statement is. */
+export function categorizeMemory(text: string): MemoryCategory {
+  const t = text.toLowerCase()
+  if (/goal|want to|aim/.test(t)) return 'goal'
+  if (/dumbbell|barbell|kettlebell|bands?|gym|equipment|bench|machine/.test(t)) return 'equipment'
+  if (/monday|tuesday|wednesday|thursday|friday|saturday|sunday|morning|evening|am\b|pm\b|o'?clock|schedule|available|busy/.test(t)) return 'availability'
+  if (/eat|food|vegan|vegetarian|allerg|lactose|gluten|protein|meal|snack|coffee|hate|love|dislike/.test(t)) return 'nutrition'
+  if (/knee|back|shoulder|injur|pain|hurt|surgery|asthma|condition|doctor|physio/.test(t)) return 'health'
+  if (/prefer|like|don'?t like|enjoy|favourite|favorite|hate/.test(t)) return 'preference'
+  if (/sleep|wake|walk|steps|habit|usually|always|never/.test(t)) return 'habit'
+  if (/talk|tone|direct|gentle|short|detailed|joke/.test(t)) return 'communication'
+  return 'note'
+}
+
 /** Cheap guard against remembering noise. */
 export function isWorthRemembering(text: string): boolean {
   const t = text.trim()

@@ -398,3 +398,26 @@ test.describe('PWA', () => {
     await expect(page.locator('link[rel="manifest"]')).toHaveCount(1)
   })
 })
+
+test.describe('Flow 13 — AI provider seam', () => {
+  test('a model provider without a reachable endpoint never breaks the coach; settings persist and revert', async ({ page }) => {
+    await loadDemo(page)
+    await page.goto('/profile/coach')
+    await expect(page.getByTestId('coach-engine-status')).toContainText('Built-in coach')
+    await page.getByText('Local model (Ollama, LM Studio)').click()
+    await page.getByLabel('Model name').fill('llama3.1')
+    await page.getByRole('button', { name: 'Save and use Local model' }).click()
+    await expect(page.getByTestId('coach-engine-status')).toContainText('Answering now: Local model')
+    // Nothing listens on the local endpoint: the built-in engine answers the same message.
+    await coachTab(page).click()
+    await send(page, 'What should I eat today?')
+    await lastCoachMessage(page)
+    await expect(page.getByText(/kcal/).last()).toBeVisible()
+    await page.reload()
+    await page.goto('/profile/coach')
+    await expect(page.getByText('llama3.1 at http://localhost:11434/v1 · in use')).toBeVisible()
+    await page.getByText('Local model (Ollama, LM Studio)').click()
+    await page.getByRole('button', { name: 'Remove' }).click()
+    await expect(page.getByTestId('coach-engine-status')).toContainText('Answering now: Built-in coach')
+  })
+})

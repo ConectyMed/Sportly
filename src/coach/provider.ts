@@ -26,7 +26,6 @@ import type { FoodAnalysis } from './food/foodAnalysis'
 import type { Insight } from './insights'
 import type { Readiness } from './readiness'
 import type { TemporalContext } from './time'
-import type { ToolDescriptor } from './tools/contracts'
 
 /**
  * Everything the coach can see when it answers. Built by the orchestrator from
@@ -133,50 +132,15 @@ export interface CoachResponse {
   expects?: ExpectSlot
 }
 
-/* ------------------------------------------------------------------ Future model contract */
+/* ------------------------------------------------------------------ Model contract */
 
 /**
- * What a real model receives. Everything here is plain data built from the
- * single store: no provider-specific types, no functions.
+ * The provider-neutral model contract (CoachModelInput / CoachModelOutput,
+ * ToolCall, ToolCallResult, ModelProvider) lives in ./model/contract.ts and is
+ * re-exported here for convenience. A model never returns CoachAction objects:
+ * it returns tool calls that Sportly resolves, materialises and executes.
  */
-export interface CoachModelInput {
-  system: string
-  context: CoachContextSnapshot
-  conversation: Array<{ role: 'user' | 'coach'; text: string; at: string }>
-  tools: ToolDescriptor[]
-  userMessage: { text: string; attachments: Array<{ id: string; kind: Attachment['kind']; name: string }> }
-}
-
-/** What a real model returns: words plus proposed tool calls. Sportly executes; the model never touches the store. */
-export interface CoachModelOutput {
-  message: string
-  toolCalls: CoachAction[]
-  references?: EntityRef[]
-  suggestedFollowups?: string[]
-  expects?: ExpectSlot
-}
-
-/** Turn a model's output into the reply shape the orchestrator executes and reconciles. */
-export function replyFromModelOutput(output: CoachModelOutput): CoachReply {
-  return {
-    text: output.message,
-    actions: output.toolCalls,
-    references: output.references,
-    suggestions: output.suggestedFollowups,
-    expects: output.expects,
-  }
-}
-
-/** Build the plain-data input a model receives for one turn. */
-export function modelInputFrom(ctx: CoachContext, req: CoachRequest, system: string, tools: ToolDescriptor[]): CoachModelInput {
-  return {
-    system,
-    context: ctx.snapshot,
-    conversation: ctx.history.filter((m) => m.role !== 'system').map((m) => ({ role: m.role as 'user' | 'coach', text: m.text, at: m.createdAt })),
-    tools,
-    userMessage: { text: req.text, attachments: req.attachments.map((a) => ({ id: a.id, kind: a.kind, name: a.name })) },
-  }
-}
+export type { CoachModelInput, CoachModelOutput, ModelProvider, ToolCall, ToolCallResult } from './model/contract'
 
 export interface CoachRequest {
   text: string
@@ -186,7 +150,12 @@ export interface CoachRequest {
   foodAnalysis?: FoodAnalysis
 }
 
+/**
+ * The built-in engine's interface: it reads a request with its context and
+ * proposes a reply with typed actions. Models do not implement this; they
+ * implement ModelProvider and go through the tool loop (./model/loop.ts).
+ */
 export interface CoachProvider {
-  id: 'local' | 'anthropic'
+  id: 'local'
   respond(request: CoachRequest): Promise<CoachReply>
 }

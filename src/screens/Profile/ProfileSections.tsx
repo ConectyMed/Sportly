@@ -1,7 +1,8 @@
 import { Pin, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { requestPushPermission } from '@/coach/coachService'
+import { coachEngineStatus, requestPushPermission } from '@/coach/coachService'
+import { DEFAULT_LOCAL_LLM_URL, PROVIDER_LABELS, type ProviderId } from '@/coach/model'
 import { buildVoice, describePersonality } from '@/coach/personality'
 import { Page } from '@/components/layout/Page'
 import { Button } from '@/components/ui/Button'
@@ -14,7 +15,7 @@ import { Slider } from '@/components/ui/Slider'
 import { buildDemoSeed } from '@/domain/demo'
 import { EQUIPMENT_LABELS } from '@/domain/exercises'
 import { DIET_LABELS, DIETARY_FLAG_LABELS, LEVEL_LABELS } from '@/domain/labels'
-import type { DietPreference, DietaryFlag, EquipmentId, FitnessLevel, MemoryCategory } from '@/domain/types'
+import type { CoachConfig, DietPreference, DietaryFlag, EquipmentId, FitnessLevel, MemoryCategory } from '@/domain/types'
 import { WEEKDAY_SHORT, relativeDay } from '@/lib/dates'
 import { cn, formatMinutes } from '@/lib/utils'
 import { userAction } from '@/coach/userActions'
@@ -243,8 +244,8 @@ function CoachSection() {
   const updateCoach = useStore((s) => s.updateCoach)
   const updatePersonality = useStore((s) => s.updatePersonality)
   const user = useStore((s) => s.user)!
-  const [keyOpen, setKeyOpen] = useState(false)
-  const [key, setKey] = useState(coach.anthropicApiKey ?? '')
+  const [sheet, setSheet] = useState<Exclude<ProviderId, 'local'> | null>(null)
+  const status = coachEngineStatus({ coach })
   const preview = useMemo(() => {
     const v = buildVoice(coach.personality)
     return v.compose({
@@ -290,41 +291,86 @@ function CoachSection() {
       <SectionLabel className="mt-7">Intelligence</SectionLabel>
       <Group>
         <ListRow label="Built-in coach" sub="Runs on this device. No account, no network." right={<Toggle checked={coach.provider === 'local'} onChange={() => updateCoach({ provider: 'local' })} label="Use built-in coach" />} />
-        <ListRow label="Claude (bring your own key)" sub={coach.anthropicApiKey ? 'Key saved on this device' : 'Optional. Richer conversation, same actions.'} onClick={() => setKeyOpen(true)} />
+        <ListRow label="Claude (bring your own key)" sub={coach.anthropicApiKey ? `Key saved on this device${coach.provider === 'anthropic' ? ' · in use' : ''}` : 'Optional. Same tools, free-form conversation.'} onClick={() => setSheet('anthropic')} />
+        <ListRow label="OpenAI (bring your own key)" sub={coach.openaiApiKey ? `Key saved on this device${coach.provider === 'openai' ? ' · in use' : ''}` : 'Optional. Same tools, free-form conversation.'} onClick={() => setSheet('openai')} />
+        <ListRow label="Local model (Ollama, LM Studio)" sub={coach.localLlmModel ? `${coach.localLlmModel} at ${coach.localLlmUrl || DEFAULT_LOCAL_LLM_URL}${coach.provider === 'local_llm' ? ' · in use' : ''}` : 'Optional. An OpenAI-compatible endpoint on your machine.'} onClick={() => setSheet('local_llm')} />
       </Group>
-      <p className="text-[12px] text-text-3 mt-2">The built-in coach handles everything in Sportly. A connected model adds free-form conversation on top and falls back to the built-in coach if it is unavailable.</p>
+      <p className="text-[12px] text-text-3 mt-2" data-testid="coach-engine-status">
+        Answering now: {PROVIDER_LABELS[status.active]}.{status.reason ? ` ${status.reason}` : ''} Every engine acts through the same Sportly tools; a connected model falls back to the built-in coach if it is unavailable.
+      </p>
 
-      <Sheet open={keyOpen} onClose={() => setKeyOpen(false)} title="Connect Claude">
-        <p className="text-[13.5px] text-text-2 mb-3">Paste an Anthropic API key. It is stored only in this browser and sent only to Anthropic.</p>
-        <TextInput value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-…" type="password" autoComplete="off" />
-        <div className="flex gap-2 mt-4 pb-2">
-          {coach.anthropicApiKey && (
+      <ProviderSheet which={sheet} coach={coach} onClose={() => setSheet(null)} onSave={(patch) => updateCoach(patch)} />
+    </Page>
+  )
+}
+
+const PROVIDER_FIELDS: Record<Exclude<ProviderId, 'local'>, { title: string; intro: string; secret?: keyof CoachConfig; model: keyof CoachConfig; url?: keyof CoachConfig; modelPlaceholder: string; secretPlaceholder?: string }> = {
+  anthropic: { title: 'Connect Claude', intro: 'Paste an Anthropic API key. It is stored only in this browser and sent only to Anthropic.', secret: 'anthropicApiKey', model: 'anthropicModel', modelPlaceholder: 'claude-sonnet-5', secretPlaceholder: 'sk-ant-…' },
+  openai: { title: 'Connect OpenAI', intro: 'Paste an OpenAI API key. It is stored only in this browser and sent only to OpenAI.', secret: 'openaiApiKey', model: 'openaiModel', modelPlaceholder: 'gpt-4.1-mini', secretPlaceholder: 'sk-…' },
+  local_llm: { title: 'Connect a local model', intro: 'Point Sportly at an OpenAI-compatible endpoint running on your machine (Ollama, LM Studio). No key, no cloud.', model: 'localLlmModel', url: 'localLlmUrl', modelPlaceholder: 'llama3.1' },
+}
+
+function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<ProviderId, 'local'> | null; coach: CoachConfig; onClose: () => void; onSave: (patch: Partial<CoachConfig>) => void }) {
+  const f = which ? PROVIDER_FIELDS[which] : undefined
+  const [secret, setSecret] = useState('')
+  const [model, setModel] = useState('')
+  const [url, setUrl] = useState('')
+  const [editing, setEditing] = useState<ProviderId | null>(null)
+  if (which && editing !== which) {
+    // Fresh sheet: load the saved values for this provider.
+    setEditing(which)
+    setSecret(f?.secret ? ((coach[f.secret] as string | undefined) ?? '') : '')
+    setModel(f ? ((coach[f.model] as string | undefined) ?? '') : '')
+    setUrl(f?.url ? ((coach[f.url] as string | undefined) ?? '') : '')
+  }
+  const configured = which ? Boolean(f?.secret ? coach[f.secret] : coach[f!.model]) : false
+  const canSave = f ? (f.secret ? secret.trim().length > 8 : model.trim().length > 0) : false
+  return (
+    <Sheet open={Boolean(which)} onClose={onClose} title={f?.title ?? ''}>
+      {f && which && (
+        <>
+          <p className="text-[13.5px] text-text-2 mb-3">{f.intro}</p>
+          <div className="space-y-2.5">
+            {f.secret && <TextInput value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={f.secretPlaceholder} type="password" autoComplete="off" aria-label="API key" />}
+            {f.url && <TextInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder={DEFAULT_LOCAL_LLM_URL} autoComplete="off" aria-label="Endpoint URL" />}
+            <TextInput value={model} onChange={(e) => setModel(e.target.value)} placeholder={`Model, e.g. ${f.modelPlaceholder}`} autoComplete="off" aria-label="Model name" />
+          </div>
+          <div className="flex gap-2 mt-4 pb-2">
+            {configured && (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  const patch: Partial<CoachConfig> = { provider: 'local' }
+                  if (f.secret) patch[f.secret] = undefined as never
+                  patch[f.model] = undefined as never
+                  if (f.url) patch[f.url] = undefined as never
+                  onSave(patch)
+                  onClose()
+                }}
+              >
+                Remove
+              </Button>
+            )}
             <Button
-              variant="danger"
+              variant="primary"
+              full
+              disabled={!canSave}
               onClick={() => {
-                updateCoach({ anthropicApiKey: undefined, provider: 'local' })
-                setKey('')
-                setKeyOpen(false)
+                const patch: Partial<CoachConfig> = { provider: which }
+                if (f.secret) patch[f.secret] = secret.trim() as never
+                patch[f.model] = (model.trim() || f.modelPlaceholder) as never
+                if (f.url) patch[f.url] = (url.trim() || DEFAULT_LOCAL_LLM_URL) as never
+                onSave(patch)
+                onClose()
+                useStore.getState().toast(`${PROVIDER_LABELS[which]} connected`, 'success')
               }}
             >
-              Remove
+              Save and use {PROVIDER_LABELS[which]}
             </Button>
-          )}
-          <Button
-            variant="primary"
-            full
-            disabled={!key.trim().startsWith('sk-ant')}
-            onClick={() => {
-              updateCoach({ anthropicApiKey: key.trim(), provider: 'anthropic' })
-              setKeyOpen(false)
-              useStore.getState().toast('Claude connected', 'success')
-            }}
-          >
-            Save and use Claude
-          </Button>
-        </div>
-      </Sheet>
-    </Page>
+          </div>
+        </>
+      )}
+    </Sheet>
   )
 }
 

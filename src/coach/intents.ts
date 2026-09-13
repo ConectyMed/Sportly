@@ -28,7 +28,7 @@ export type Intent =
   | { kind: 'forget'; text: string }
   | { kind: 'what_do_you_know' }
   | { kind: 'plan_week' }
-  | { kind: 'reschedule'; from?: number; to?: number; toRelative?: 'tomorrow' | 'today' }
+  | { kind: 'reschedule'; from?: number; to?: number; toRelative?: 'tomorrow' | 'today'; /** “Move that to Friday”: the session in conversation context. */ fromContext?: boolean }
   | { kind: 'set_goal'; goalType?: GoalType; metric?: 'body_weight' | 'bench_press' | 'squat' | 'deadlift' | 'workouts_per_week' | 'steps_per_day'; target?: number }
   | { kind: 'log_weight'; kg: number }
   | { kind: 'pain'; area?: string; severe: boolean }
@@ -292,7 +292,7 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
     if (!(time.frame === 'today' && domain === 'food' && time.mode === 'did')) return { kind: 'day_report', frame: time.frame, mode: time.mode, domain }
   }
   if (/\b(what|everything) (have|did) i (eat|eaten|had|have)\b|\bwhat i'?ve eaten\b|\bmy (food|meals|intake) (today|so far)\b|\beaten today\b/.test(t)) return { kind: 'eaten_today' }
-  if (/\b(how (much|many)|what'?s?)\b.*\b(protein|calories|kcal|carbs|fat)\b.*\b(left|remaining|to go|have i got)\b|\b(remaining|left)\b.*\b(protein|calories|kcal|carbs|fat|for today)\b|\bhow (am i|'?m i) doing on (food|protein|calories|nutrition)/.test(t)) {
+  if (/\b(how (much|many)|what'?s?)\b.*\b(protein|calories|kcal|carbs|fat)\b.*\b(left|remaining|to go|have i got)\b|\b(remaining|left)\b.*\b(protein|calories|kcal|carbs|fat|for today)\b|\bhow (am i|'?m i) doing on (food|protein|calories|nutrition)|\bwhat (do|have) i (have |got )?left( to eat)?( today| tonight)?\??$|\bwhat'?s left (for |to eat )?(today|tonight)\b/.test(t)) {
     const macro = /protein/.test(t) ? 'protein' : /carb/.test(t) ? 'carbs' : /\bfat\b/.test(t) ? 'fat' : /calorie|kcal/.test(t) ? 'calories' : undefined
     return { kind: 'remaining_nutrition', macro }
   }
@@ -384,7 +384,10 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   if (/\b(log|record|track|enter)\b.*\bweight\b/.test(t) || /^weigh[- ]?in/.test(t)) return { kind: 'log_weight_prompt' }
 
   // ---- Goals
-  const statesGoal = /\bi (want|would like|'d like|am trying|'m trying|need) to (build|gain|lose|get|improve|drop|put on|become|be)\b/.test(t) && !/\d/.test(t) && parseGoalType(t) !== undefined
+  const statesGoal = /\bi (want|would like|'d like|am trying|'m trying|need)\b/.test(t) && !/\d/.test(t) && parseGoalType(t) !== undefined && !/\b(workout|session|program|plan|eat|meal|minutes?|today|tomorrow)\b/.test(t)
+  // “Actually, make that strength” / “change it to fat loss”: a change of mind about the goal just discussed.
+  const changesGoal = /^(?:(?:actually|no|hmm|wait|ok),?)?\s*(?:make (?:that|it)|change (?:that|it) to|let'?s (?:do|say|go with)|switch (?:that|it) to|go with)\s+([a-z ]{3,30})[.!]?$/.exec(t)
+  if (changesGoal && !opts.lastAvailabilityScope && parseGoalType(changesGoal[1]) !== undefined && !/\b(shorter|longer|lighter|harder|cardio|minutes?|upper|lower|legs?)\b/.test(changesGoal[1])) return { kind: 'set_goal', goalType: parseGoalType(changesGoal[1]) }
   if ((/\b(goal|target|aim|want to (reach|get to|hit|weigh|be)|my new goal)\b/.test(t) || statesGoal) && !/program|plan for|progress/.test(t)) {
     const metric = /bench/.test(t) ? 'bench_press' : /squat/.test(t) ? 'squat' : /deadlift/.test(t) ? 'deadlift' : /workouts?|sessions?|train/.test(t) && /week/.test(t) ? 'workouts_per_week' : /steps/.test(t) ? 'steps_per_day' : kg ? 'body_weight' : undefined
     const num = metric === 'workouts_per_week' ? parseDaysPerWeek(t) ?? Number(t.match(/(\d)\s*(?:workouts?|sessions?)/)?.[1]) : metric === 'steps_per_day' ? Number((t.match(/([\d,]{4,6})\s*steps/)?.[1] ?? '').replace(/,/g, '')) : kg ?? Number(t.match(/(\d{2,3})\s*(?:kg)?/)?.[1])
@@ -406,6 +409,11 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
     const from = parseWeekday(move[2]) ?? undefined
     const toWord = move[3]
     return toWord.startsWith('tom') || toWord.startsWith('tod') ? { kind: 'reschedule', from, toRelative: toWord.startsWith('tom') ? 'tomorrow' : 'today' } : { kind: 'reschedule', from, to: parseWeekday(toWord) ?? undefined }
+  }
+  const moveThat = t.match(/^(?:can you |please )?(?:move|push|shift|reschedule|switch)\s+(?:it|that|this|that one|this one)\s+(?:to|for|onto)\s+(tomorrow|today|mon|tue|wed|thu|fri|sat|sun)[a-z]*/)
+  if (moveThat) {
+    const w = moveThat[1]
+    return w.startsWith('tom') || w.startsWith('tod') ? { kind: 'reschedule', fromContext: true, toRelative: w.startsWith('tom') ? 'tomorrow' : 'today' } : { kind: 'reschedule', fromContext: true, to: parseWeekday(w) ?? undefined }
   }
   const moveTodays = t.match(/\b(move|reschedule|push|shift)\b.*\b(today'?s|this|my)?\s*(workout|session)\b.*\b(to\s+)?(tomorrow|mon|tue|wed|thu|fri|sat|sun)[a-z]*/)
   if (moveTodays) {
@@ -655,7 +663,7 @@ const COMPOUND_ORDER: Partial<Record<Intent['kind'], number>> = {
 export function splitCompound(text: string, opts: ParseOptions): CompoundPart[] | undefined {
   if (opts.expects) return undefined
   const clauses = text
-    .split(/\s*[,;]\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?(?=i\b|i'|train|create|make|plan|build|remember|set|log|give|move|call|be\b|eat|only|also|my|make)|\s+then\s+/i)
+    .split(/\s*[,;]\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?(?=i\b|i'|train|create|make|plan|build|remember|set|log|give|move|call|be\b|eat|only|also|my|make|a\b|an\b|the\b)|\s+then\s+/i)
     .map((c) => c.trim())
     .filter((c) => c.length > 2)
   if (clauses.length < 2) return undefined

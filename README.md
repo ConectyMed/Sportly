@@ -33,25 +33,44 @@ On first launch choose **Meet your coach** (onboarding) or **Explore with a demo
 
 Food and living state: “I ate 200 g chicken, rice and broccoli” · “There was more rice” · “I only ate half” · “Remove the sauce” · “Add it to lunch” · “What have I eaten today?” · “How much protein do I have left?” · “What would you choose: salmon, pasta or a burger?” · “I want to gain 5 kg” · “How does that affect my plan?” · “I can train four days this week” → “Actually make it three” · “I just finished my workout” · “Never give me burpees”.
 
-## Ready for a real AI brain (V5)
+## Plugging in the brain (V6)
 
-Sportly is an AI coach whose application is its body. The local engine is the brain today; a model can replace it tomorrow without touching the domain, because the seams are explicit:
+Sportly is an AI coach whose application is its body. The built-in engine is the brain today; a model plugs in tomorrow without touching the domain. **The model decides, Sportly executes.**
 
 ```
-USER → CONVERSATION → provider (understanding: intent → proposed tool calls)
-     → COACH ORCHESTRATOR (src/coach/coachService.ts)
-     → SPORTLY TOOLS (src/coach/tools: validation → execution → idempotency → audit)
-     → single store → derived state (selectors) → refreshed CoachContext → honest response
+USER MESSAGE
+  → ModelProvider.complete(CoachModelInput)          src/coach/model/contract.ts, prompt.ts
+      (system rules, persona, CURRENT snapshot, RELEVANT memory + knowledge, RECENT conversation, tool schemas)
+  → CoachModelOutput { message, toolCalls }          provider-neutral ToolCall { id, name, arguments }
+  → runToolCall                                       src/coach/model/modelTools.ts
+      allowlist → JSON-schema validation → reference resolution (ids, dates, “the one we are discussing”)
+      → materialisation with Sportly's generators → registry (domain validation, idempotency, audit)
+  → ToolCallResult { ok, data (the real state), error, affectedEntities, changes }
+  → context rebuilt from the store → back to the model … (bounded loop)   src/coach/model/loop.ts
+  → COACH RESPONSE with the actions that really happened
 ```
 
-- **Single source of truth.** `useStore` holds every entity once. `CoachContextSnapshot` (`src/coach/context.ts`) is derived from it on every turn and never stored: profile, goals with progress, training, readiness, nutrition (derived from logged meals), progress, calendar, program, memory and conversation references. Priority is enforced by construction: structured state first, then recent actions, then conversation, then memory, then history.
-- **Tools, not mutations.** Read tools (`get_user_context`, `get_today`, `get_remaining_nutrition`, `search_knowledge`, …) and action tools (`create_workout`, `complete_workout`, `reschedule_workout`, `log_meal`, `set_goal`, `remember`, …) have typed inputs and outputs (`ToolResult`), validate against the current store, refuse impossible or ambiguous requests with a reason, and report exactly what changed (`DomainChange`). The registry adds a repeat window on top of per-entity checks, so a retried request never creates a duplicate, and records every call in a persisted action log.
-- **Honest responses.** A reply carries the actions that were really executed (`Message.actions`). If a tool fails, the orchestrator appends what did not go through; the coach never says “done” for something that did not happen. Tests enforce a NO-LIE rule (every claim of change is backed by an executed action) and a NO-DEAD-END rule (every suggestion chip resolves to a real intent).
+- **One tool source, three shapes.** `src/coach/model/toolDefinitions.ts` holds the 19 read tools and 25 model-level action tools with JSON schemas and constraints. `adapters/openaiCompatible.ts` and `adapters/anthropic.ts` convert that single list into each provider's native tool format; nothing is duplicated per provider.
+- **Model-level tools, not domain objects.** A model asks for `plan_workout { date, minutes, equipment }` or `set_goal { goal, metric, target }`; Sportly builds the Workout, Program, NutritionPlan or LoggedMeal itself. The model never fabricates exercises, sets, loads or ids.
+- **Untrusted input.** Every call passes allowlist → schema parsing (coercion, unknown keys dropped) → domain validation → execution. Invalid calls are structured errors; state never changes silently.
+- **Ambiguity and failure are data.** “Delete my workout” with several candidates returns `ambiguous` with real entities so the model asks; “move to Friday” when Friday is taken returns `conflict` with the clash. A failed call halts the rest of its batch (`skipped`) and the model re-plans with the results.
+- **Context refresh.** The `CoachContextSnapshot` is rebuilt from the store before every model round, so after `update_availability` the model already sees the new schedule. UI changes propagate the same way (APP → COACH), and every executed tool reaches every screen (COACH → APP).
+- **Limits.** Six model rounds and twelve tool calls per turn, a timeout per model call, and repeat detection at model-tool and registry level. If a limit is hit the user gets an honest summary of what was done.
+- **Adapters, isolated and lazy.** `OpenAICompatibleProvider` covers OpenAI and any local OpenAI-compatible endpoint (Ollama, LM Studio); `AnthropicProvider` covers Claude. They are loaded on demand and only when the user has configured them in Profile → Coach → Intelligence. No key or endpoint is bundled; an incomplete configuration, an unreachable endpoint or a provider error falls back to the built-in coach for that message.
+- **Sportly owns memory and facts.** `save_memory` is a request: Sportly decides category, persistence, expiry and conflict resolution. Weight, meals, workouts, goals, calendar and progress always come from the store; the model reasons over them.
+- **Audit.** Every executed action records the tool, the model-level tool that requested it (`via`), the validated arguments, the tool call id, the outcome and the affected entities.
+
+Tests: `src/coach/__tests__/model.test.ts` (provider contract, a `FakeLLMProvider` operating the app end to end, error handling, loop limits, reverse flow, journeys), `adapters.test.ts` (native formats → neutral tool calls with mocked responses, configuration, migration, architecture scans), `journeys.test.ts` (the same journeys through the built-in engine).
+
+### V5 foundations that V6 builds on
+
+- **Single source of truth.** `useStore` holds every entity once. `CoachContextSnapshot` (`src/coach/context.ts`) is derived from it on every turn and never stored. Priority is enforced by construction: structured state first, then recent actions, then conversation, then memory, then history.
+- **Tools, not mutations.** Read tools and action tools (`src/coach/tools`) have typed inputs and outputs (`ToolResult`), validate against the current store, refuse impossible or ambiguous requests with a reason, and report exactly what changed (`DomainChange`). The registry adds a repeat window and records every call in a persisted action log.
+- **Honest responses.** A reply carries the actions that were really executed (`Message.actions`). Tests enforce a NO-LIE rule (every claim of change is backed by an executed action) and a NO-DEAD-END rule (every suggestion chip resolves to a real intent).
 - **Temporal context.** `src/coach/time.ts` distinguishes today, yesterday, tomorrow, this week and next week, and “what did I do” from “what was planned” from “what is coming”.
-- **Multi-action requests.** “I want to build muscle, train four days a week, and create a 12-week program” is split into ordered steps, each executed with a refreshed context so the program sees the new goal and schedule.
-- **Memory with rules.** Memories carry confidence, persistence (persistent vs temporary), expiry and subjects. New explicit information replaces a contradicting older memory (“prefers running” → “hates running”). Passing states (“tired today”) are check-ins, not memories.
-- **Provider contract.** `CoachModelInput` (system instructions, context snapshot, conversation, tool descriptors from `describeTools()`) and `CoachModelOutput` (message, tool calls, references, follow-ups) are plain data. `LocalCoachProvider` stays honest about being rule-based; the optional bring-your-own-key provider maps model tool calls onto the same engine.
-- **Knowledge, separate from behaviour.** `src/knowledge` defines `KnowledgeSource` / `KnowledgeDocument` / `KnowledgeChunk` with provenance and a `KnowledgeRetriever` interface, seeded with concise coaching notes. A richer package plugs in as another source.
+- **Multi-action requests.** “I want muscle gain, four days a week and a 12-week program” is split into ordered steps, each executed with a refreshed context.
+- **Memory with rules.** Memories carry confidence, persistence, expiry and subjects. New explicit information replaces a contradicting older memory. Passing states are check-ins, not memories.
+- **Knowledge, separate from behaviour.** `src/knowledge` defines sources, documents and chunks with provenance and a `KnowledgeRetriever` interface. Relevant hits are attached to the model input per message; the base is never dumped whole.
 
 ## Food scan and one living state
 
@@ -66,7 +85,8 @@ USER → CONVERSATION → provider (understanding: intent → proposed tool call
 ```
 UI (React screens & components)
   → coachService (orchestration: builds context, applies actions to state)
-    → CoachProvider (LocalCoachProvider | AnthropicCoachProvider)
+    → built-in engine (LocalCoachProvider: intent → proposed actions)
+      | model loop (src/coach/model: ModelProvider → tool calls → runToolCall → registry)
       → generators (workout, program, nutrition), readiness, insights, personality voice
   → Zustand store (persisted to localStorage; attachment blobs in IndexedDB)
 ```
@@ -81,7 +101,7 @@ UI (React screens & components)
 | Orchestration | `src/coach/coachService.ts` | The pipeline: normalise → split compound requests → context → provider → tools → honest reply. Also first conversation, quick actions, contextual notifications. |
 | Coach tools | `src/coach/tools/` | `contracts.ts` (ToolResult, ToolDescriptor), `readTools.ts`, `actionTools.ts`, `registry.ts` (idempotency, audit log, tool descriptions). `src/coach/context.ts` builds the `CoachContextSnapshot`; `src/coach/time.ts` the temporal context; `src/coach/memory.ts` the memory rules. |
 | Knowledge | `src/knowledge/` | Document / chunk / source types, a local keyword retriever and seed coaching notes with provenance. |
-| Remote AI | `src/coach/anthropicProvider.ts` | Optional bring-your-own-key provider. The model chooses tools; Sportly’s engine materialises the entities so state stays consistent. Falls back to the local coach on any failure. |
+| Model seam | `src/coach/model/` | `contract.ts` (CoachModelInput/Output, ToolCall, ToolCallResult, ModelProvider), `toolDefinitions.ts` (the one tool list with JSON schemas), `schema.ts` (validation), `resolve.ts` (references), `modelTools.ts` (resolve → materialise → execute), `loop.ts` (bounded tool loop with context refresh), `prompt.ts` (model input), `providers.ts` (configuration, lazy adapters), `adapters/` (OpenAI-compatible incl. local endpoints, Anthropic). No key is bundled; the built-in coach is the default and the fallback. |
 | UI kit | `src/components/ui`, `src/components/charts` | Buttons, cards, sheets, sliders, segmented controls, chips, toasts, rings, dependency-free SVG charts. |
 | Screens | `src/screens/*` | Onboarding, Home, Coach, Workout (detail / live session / summary), Nutrition, Progress, Goals, Program, Calendar, Notifications, Profile sections. |
 

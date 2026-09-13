@@ -55,8 +55,9 @@ export interface ToolDescriptor {
   name: string
   kind: 'read' | 'action'
   description: string
-  /** JSON-Schema-like shape of the input, kept deliberately small. */
+  /** JSON Schema of the input (see src/coach/model/schema.ts for the supported subset). */
   input: Record<string, unknown>
+  constraints?: string[]
 }
 
 export function change(type: DomainChange['type'], entity: EntityRef, summary: string): DomainChange {

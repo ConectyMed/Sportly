@@ -280,6 +280,8 @@ export function runAction(action: CoachAction): ToolResult<ActionData> {
         const m = action.measurement
         if (!m || !Number.isFinite(m.value) || m.value <= 0) return fail('invalid_input', 'A measurement needs a positive value.')
         if (!DAY.test(m.date)) return fail('invalid_input', 'A measurement needs a valid date.')
+        if (m.type === 'body_weight' && !(m.value > 20 && m.value < 400)) return fail('invalid_input', 'That body weight does not look right (20–400 kg).')
+        if (m.type === 'body_fat' && !(m.value > 1 && m.value < 70)) return fail('invalid_input', 'Body fat is a percentage between 1 and 70.')
         const dup = s.measurements.find((x) => x.type === m.type && x.date === m.date && x.value === m.value)
         if (dup) return ok({ summary: `${m.value} ${m.unit} was already logged for ${formatShortDate(fromDayKey(m.date))}.`, entity: ref('measurement', dup.id) }, [], { idempotent: true })
         s.addMeasurement(m)
