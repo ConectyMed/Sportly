@@ -188,7 +188,8 @@ export interface ParseOptions {
 
 export function parseIntent(raw: string, opts: ParseOptions): Intent {
   const text = raw.trim()
-  const t = text.toLowerCase()
+  // Phone keyboards type curly apostrophes; every pattern below assumes the straight one.
+  const t = text.toLowerCase().replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
   if (opts.hasAttachments && !t) return { kind: 'attachment' }
 
   // ---- Slot answers first: the coach asked a question and the user answered.
@@ -286,7 +287,7 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   }
   if (/\b(what would you (choose|pick|order|go for)|what should i (choose|pick|go for)|help me (choose|pick|order)|which (one|dish|option))\b/.test(t)) {
     // Options can ride along in the same message: “…choose: salmon, pasta or a burger?”
-    const inline = text.match(/(?::|—|–|\bbetween\b|\bfrom\b)\s*(.+?)\??$/i)
+    const inline = text.match(/(?::|—|–|\?|\bbetween\b|\bfrom\b)\s*(.+?)\??$/i)
     const options = inline ? splitOptions(inline[1]).filter((o) => findFoodsInText(o).length > 0) : []
     return { kind: 'menu_help', options: options.length >= 2 ? options : undefined }
   }
@@ -340,8 +341,9 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   if (delta && !/bench|squat|deadlift|bar\b/.test(t)) return { kind: 'goal_delta', kg: Number(delta[2].replace(',', '.')), direction: /gain|put on|add/.test(delta[1]) ? 'gain' : 'lose' }
   const dislike = t.match(/\b(?:i )?(?:hate|can'?t stand|don'?t like|dislike|never (?:give me|make me do|program)|no more|stop giving me|not a fan of)\s+([a-z][a-z\- ]{2,30}?)(?:\s+(?:please|today|anymore|again)|[.,!]|$)/)
   if (dislike && !/(this|it|that|the (plan|program|workout))$/.test(dislike[1].trim())) return { kind: 'dislike_exercise', text: dislike[1].trim() }
-  if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|i (changed|updated) my goal|does (that|this) change (my|the) plan)\b/.test(t)) return { kind: 'goal_impact' }
-  if (/^(what about|what'?s|and|how about)\s+tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have) tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'tomorrow' }
+  // “I changed my goal” is a request to set it (handled by the goal block below); “how does that affect my plan” is the impact question.
+  if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|does (that|this) change (my|the) plan)\b/.test(t)) return { kind: 'goal_impact' }
+  if (/^(what about|what'?s|and|how about)\s+(?:(?:on|up|planned|happening|scheduled)\s+(?:for\s+)?)?tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have|doing|training) tomorrow|\b(am i|do i) (train|training|working out|lifting) tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'tomorrow' }
   const energy = t.match(/\b(?:my )?energy (?:is |at |level )?(?:a |an )?(10|[1-9])(?:\s*(?:\/|out of|of)\s*10)?\b/)
   if (energy) return { kind: 'energy_report', value: Number(energy[1]) }
 
@@ -397,7 +399,7 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
 
   // ---- Progress
   if (/\b(why|what).*\b(weight|scale)\b.*\b(stopped|stuck|stall|plateau|not moving|isn'?t moving|won'?t move|same)\b/.test(t) || /plateau/.test(t)) return { kind: 'weight_stalled' }
-  if (/\b(analy[sz]e|review|how am i doing|how'?s my|assess|check|look at)\b.*\b(progress|numbers|stats|results|going)\b/.test(t) || /^(progress|my progress|how am i doing|am i progressing|am i making progress)/.test(t) || /how (did|have) i (do|done|been doing)|how was my (week|month)|how did that session go/.test(t)) return { kind: 'analyze_progress' }
+  if (/\b(analy[sz]e|review|how am i doing|how'?s my|assess|check|look at)\b.*\b(progress|numbers|stats|results|going)\b/.test(t) || /^(progress|my progress|how am i doing|how am i progressing|am i progressing|am i making progress|how'?s (my|the) progress)/.test(t) || /how (did|have) i (do|done|been doing)|how was my (week|month)|how did that session go/.test(t)) return { kind: 'analyze_progress' }
 
   // ---- Nutrition
   if (/\b(what should i order|what to order|order|menu)\b/.test(t) && !/program/.test(t)) return { kind: 'order_advice' }
@@ -509,17 +511,23 @@ function wordToNumber(w: string): number | undefined {
   return map[w]
 }
 
+/** Split “salmon with rice, chicken pasta or a burger and fries” into dishes; “and” only separates inside a comma list. */
 function splitOptions(text: string): string[] {
-  return text
-    .split(/,|\bor\b|\band\b|\n|;|\//i)
-    .map((s) => s.replace(/^(the|a|an)\s+/i, '').trim())
+  const body = text
+    .replace(/^.*?(?:what would you (?:choose|pick|order|go for)|what should i (?:choose|pick|go for)|help me (?:choose|pick|order)|which (?:one|dish|option))\??\s*(?::|—|–|between|from)?\s*/i, '')
+    .replace(/\?+$/, '')
+  const chunks = body.split(/,|\bor\b|\n|;|\//i)
+  // “salmon, pasta and burger” is three dishes; “pasta or a burger and fries” keeps “burger and fries” together.
+  const parts = body.includes(',') && !/\bor\b/i.test(body) ? chunks.flatMap((c) => c.split(/\band\b/i)) : chunks
+  return parts
+    .map((s) => s.replace(/^(the|a|an|maybe|either)\s+/i, '').trim())
     .filter((s) => s.length > 2)
     .slice(0, 6)
 }
 
 /** Parse natural corrections to a meal in context. Order-preserving; several can stack. */
 export function parseMealCorrections(raw: string): MealCorrection[] {
-  const t = raw.toLowerCase().replace(/[.!]+$/, '')
+  const t = raw.toLowerCase().replace(/[’‘`´]/g, "'").replace(/[.!]+$/, '')
   const out: MealCorrection[] = []
   const slot = parseSlot(t)
   if (slot && /\b(was|is|it'?s|make it|actually|not lunch|not dinner|not breakfast|this was|that was|log (it )?as|count (it )?as)\b/.test(t) && !/^(add|log|save)/.test(t)) out.push({ type: 'slot', slot })

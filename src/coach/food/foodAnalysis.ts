@@ -165,7 +165,15 @@ export function analyzeDescription(text: string): FoodAnalysis {
 }
 
 export function mealName(items: FoodItem[]): string {
-  const main = [...items].sort((a, b) => b.calories - a.calories).slice(0, 3).map((i) => i.name)
+  // Protein first, then the main carb, then the rest: “Chicken breast, Rice & vegetables”, whatever the portions.
+  const rank = (i: FoodItem) => {
+    const cat = FOOD_MAP[i.foodId ?? '']?.category
+    return cat === 'protein' ? 0 : cat === 'mixed' ? 1 : cat === 'carb' ? 2 : cat === 'sauce' ? 5 : cat === 'fat' ? 4 : 3
+  }
+  const main = [...items]
+    .sort((a, b) => rank(a) - rank(b) || b.calories - a.calories)
+    .slice(0, 3)
+    .map((i) => i.name)
   if (!main.length) return 'Meal'
   if (main.length === 1) return main[0]
   return `${main.slice(0, -1).join(', ')} & ${main[main.length - 1].toLowerCase()}`
@@ -174,7 +182,10 @@ export function mealName(items: FoodItem[]): string {
 /** Replace a meal's items and re-derive its totals and name. Used by UI edits and corrections alike. */
 export function withItems(meal: LoggedMeal, items: FoodItem[], extra: Partial<LoggedMeal> = {}): LoggedMeal {
   const t = totalsOf(items)
-  return { ...meal, ...extra, items, ...t, name: extra.name ?? (items.length ? mealName(items) : meal.name), updatedAt: new Date().toISOString() }
+  // Portion changes keep the name; only adding or removing foods renames the meal.
+  const sameFoods = items.length === meal.items.length && items.every((i) => meal.items.some((m) => m.id === i.id))
+  const name = extra.name ?? (sameFoods || !items.length ? meal.name : mealName(items))
+  return { ...meal, ...extra, items, ...t, name, updatedAt: new Date().toISOString() }
 }
 
 /* ------------------------------------------------------------------ Corrections */
@@ -337,6 +348,7 @@ export function buildMeal(analysis: FoodAnalysis, opts: { date: string; slot: Me
 /** Suggest a meal slot from the time of day. */
 export function slotForTime(d = new Date()): Meal['slot'] {
   const h = d.getHours()
+  if (h < 4) return 'dinner' // a late-night plate belongs to the evening, not to breakfast
   if (h < 10.5) return 'breakfast'
   if (h < 15) return 'lunch'
   if (h < 17.5) return 'snack'

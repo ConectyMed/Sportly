@@ -655,7 +655,10 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       if (kinds.has('image')) {
         const lowered = userText.toLowerCase()
         const foodish = /meal|food|ate|eat|plate|lunch|dinner|breakfast|snack|calories|protein|menu|restaurant/.test(lowered)
+        // Context resolution: a photo sent while we are talking about a restaurant is a menu.
+        const restaurantTalk = ctx.history.slice(-6).some((m) => /restaurant|menu|eating out|order/i.test(m.text))
         const fa = req.foodAnalysis
+        if (!lowered && restaurantTalk && !(fa && fa.items.length)) return respond({ kind: 'menu_help' }, req, ctx, voice)
         // A real vision model recognised food (or a menu) in the photo.
         if (fa && fa.analysis === 'vision' && fa.items.length) return foodDraftReply(fa, req, ctx, voice, parseSlot(lowered))
         if (fa && fa.analysis === 'vision' && /menu/.test(fa.name.toLowerCase())) return respond({ kind: 'menu_help' }, req, ctx, voice)
@@ -888,7 +891,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       const isDraft = current.status === 'draft'
       return {
         text: voice.compose({
-          core: `${applied.join(' ')} Now about ${current.calories} kcal and ${current.proteinG} g protein.${failed.length ? ` ${failed.join(' ')}` : ''}${isDraft ? '' : ` ${intakeLine(ctx, current, meal)}`}`,
+          core: `${applied.join(' ')} That makes it about ${current.calories} kcal and ${current.proteinG} g protein.${failed.length ? ` ${failed.join(' ')}` : ''}${isDraft ? '' : ` ${intakeLine(ctx, current, meal)}`}`,
           extra: isDraft ? `Say “add it to ${slotLabel(current.slot)}” when it looks right.` : undefined,
           calm: 'Updated.',
           push: 'Updated. Precision pays.',
@@ -999,7 +1002,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       const others = ranked.slice(1)
       return {
         text: voice.compose({
-          core: `I would go with the ${best.name}: roughly ${best.t.calories} kcal and ${best.t.proteinG} g protein${others.length ? `, versus ${others.map((o) => `${o.name} (~${o.t.calories} kcal, ${o.t.proteinG} g protein)`).join(' and ')}` : ''}. It fits the ${Math.max(0, n.remaining.calories).toLocaleString()} kcal and ${Math.max(0, n.remaining.proteinG)} g protein you have left.`,
+          core: `I would go with the ${best.name}: roughly ${best.t.calories} kcal and ${best.t.proteinG} g protein${others.length ? `, versus ${listWithAnd(others.map((o) => `${o.name} (~${o.t.calories} kcal, ${o.t.proteinG} g protein)`))}` : ''}. It fits the ${Math.max(0, n.remaining.calories).toLocaleString()} kcal and ${Math.max(0, n.remaining.proteinG)} g protein you have left.`,
           reason: goal === 'lose_fat' ? 'Protein keeps you full and the calories stay honest.' : goal === 'build_muscle' ? 'Protein first, then enjoy the rest.' : 'Balanced and satisfying.',
           extra: 'Rough restaurant estimates, so treat them as a guide.',
           quip: 'Ordering is a skill. You just levelled up.',
@@ -1045,7 +1048,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         text: voice.compose({ core: `${crossesWeek ? 'Your next seven days' : 'This week'}: ${week.map((e) => `${weekdayName(fromDayKey(e.date), true)} ${e.title}`).join(' · ')}. ${plural(week.length, 'session')} on your calendar${dropped.length ? `, ${plural(dropped.length, 'session')} removed` : ''}, just for this week.`, reason: 'Your usual schedule stays as it is.', calm: 'Flexible weeks are fine.', push: 'Three good sessions beat five rushed ones.' }),
         cards: [{ id: uid('card'), type: 'calendar', title: crossesWeek ? 'Next seven days' : 'This week', subtitle: `${plural(week.length, 'session')} planned`, data: { days: week.map((e) => ({ date: e.date, title: e.title })) } }],
         actions: [...dropped.map((w) => ({ type: 'remove_workout', workoutId: w.id }) as CoachAction), ...week.map((e) => ({ type: 'create_workout', workout: e.workout }) as CoachAction)],
-        suggestions: ['Actually make it three', 'Show my calendar', 'Start today’s session'],
+        suggestions: [week.length > 2 ? `Actually make it ${['zero', 'one', 'two', 'three', 'four', 'five', 'six'][week.length - 1]}` : `Make it ${['zero', 'one', 'two', 'three', 'four', 'five', 'six'][week.length + 1]}`, 'Show my calendar', ctx.todayWorkout && ctx.todayWorkout.status === 'planned' ? 'Start today’s session' : 'What should I eat today?'],
         contextPatch: { lastAvailabilityScope: 'week', topic: 'calendar' },
         status: 'Planning your week',
         thinkMs: 1200,
@@ -1136,7 +1139,7 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
       const targets = computeTargets(ctx.user, ctx.goals, Boolean(ctx.todayWorkout && ctx.todayWorkout.status !== 'skipped'))
       const lines = [
         `Your primary goal is ${primary.label.toLowerCase()}${primary.targetValue ? ` (target ${primary.targetValue} ${primary.targetUnit ?? ''})`.replace(/\s+\)/, ')') : ''}.`,
-        `Nutrition: ${targets.calories.toLocaleString()} kcal and ${targets.proteinG} g protein today (${targets.rationale.toLowerCase()})`,
+        `Nutrition: ${targets.calories.toLocaleString()} kcal and ${targets.proteinG} g protein today (${targets.rationale.toLowerCase().replace(/[.!]+$/, '')})`,
         `Training: sessions are built for ${primary.type === 'strength' ? 'heavier, lower-rep work' : primary.type === 'lose_fat' ? 'muscle-protecting lifting with shorter rests' : primary.type === 'conditioning' || primary.type === 'endurance' ? 'a stronger engine with intervals mixed in' : primary.type === 'build_muscle' ? 'progressive volume in the 8–12 rep range' : 'balanced, sustainable sessions'}.`,
       ]
       if (ctx.activeProgram && ctx.activeProgram.goalType !== primary.type) lines.push(`${ctx.activeProgram.name} was built for ${GOAL_LABELS[ctx.activeProgram.goalType].toLowerCase()}, so it no longer matches; I can rebuild it around the new goal.`)
@@ -1404,6 +1407,11 @@ function nextWeekdayIncludingPast(weekday: number, from: Date): Date {
 }
 
 const WEEKDAY_NAMES_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function listWithAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts.join('')
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+}
 
 function slotLabel(slot: Meal['slot']): string {
   return { breakfast: 'breakfast', lunch: 'lunch', dinner: 'dinner', snack: 'a snack', pre_workout: 'pre-workout', post_workout: 'post-workout' }[slot]
