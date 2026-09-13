@@ -12,6 +12,8 @@ import { buildVoice, type Voice } from './personality'
 import { generateProgram, materializeProgram, programWeekFor } from './programGenerator'
 import type { CoachAction, CoachContext, CoachProvider, CoachReply, CoachRequest } from './provider'
 import { computeReadiness } from './readiness'
+import { selectDaySummary } from './context'
+import { labelForFrame, rangeFor } from './time'
 import { generateWorkout, primaryGoal, removeCardio, replaceExercise, restrictEquipment, scaleIntensity, shortenWorkout } from './workoutGenerator'
 
 /**
@@ -1169,6 +1171,86 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         text: voice.compose({ core: `Tomorrow is a rest day on your schedule. ${ctx.tomorrowWorkout ? '' : 'A walk and good sleep, or say the word and I will plan something.'}`, calm: 'Rest is part of the plan.' }),
         suggestions: ['Plan a workout for tomorrow', 'Plan my week'],
         contextPatch: { topic: 'calendar' },
+      }
+    }
+
+    case 'day_report': {
+      // Temporal questions answer from the calendar and the journal, never from memory.
+      const range = rangeFor(intent.frame, ctx.time)
+      const days: string[] = []
+      for (let d = fromDayKey(range.from); dayKey(d) <= range.to; d = addDays(d, 1)) days.push(dayKey(d))
+      const summaries = days.map((k) => selectDaySummary({ workouts: Object.fromEntries(ctx.workouts.map((w) => [w.id, w])), meals: Object.fromEntries(ctx.meals.map((m) => [m.id, m])), checkIns: ctx.checkIns }, k))
+      const label = labelForFrame(intent.frame)
+      const completed = summaries.flatMap((s) => s.completed)
+      const planned = summaries.flatMap((s) => s.planned)
+      const skipped = summaries.flatMap((s) => s.skipped)
+      const single = days.length === 1
+      const dayName = (date: string) => (single ? '' : `${weekdayName(fromDayKey(date), true)} `)
+      const lines: string[] = []
+      if (intent.domain !== 'food') {
+        if (intent.mode === 'planned') {
+          const all = [...planned, ...completed, ...skipped]
+          lines.push(all.length ? `Planned ${label}: ${all.map((w) => `${dayName(w.date)}${w.title}${w.status === 'completed' ? ' (done)' : w.status === 'skipped' ? ' (skipped)' : ''}`).join(' · ')}.` : `Nothing was planned ${label}.`)
+        } else if (intent.mode === 'did') {
+          lines.push(completed.length ? `Trained ${label}: ${completed.map((w) => `${dayName(w.date)}${w.title}${w.volumeKg ? ` (${w.volumeKg.toLocaleString()} kg)` : ''}`).join(' · ')}.` : `No completed session ${label}.`)
+          if (planned.length && intent.frame !== 'today') lines.push(`Still on the plan: ${planned.map((w) => `${dayName(w.date)}${w.title}`).join(' · ')}.`)
+          if (skipped.length) lines.push(`Skipped: ${skipped.map((w) => `${dayName(w.date)}${w.title}`).join(' · ')}.`)
+        } else {
+          lines.push(planned.length ? `Coming up ${label}: ${planned.map((w) => `${dayName(w.date)}${w.title}`).join(' · ')}.` : `Nothing planned ${label} yet.`)
+        }
+      }
+      if (intent.domain !== 'training') {
+        const foodDays = summaries.filter((s) => s.meals.length)
+        if (intent.frame === 'today' || intent.frame === 'yesterday' || intent.frame === 'tomorrow') {
+          const s = summaries[0]
+          if (intent.mode === 'upcoming') lines.push(`Targets ${label}: ${ctx.nutrition.targets.calories.toLocaleString()} kcal and ${ctx.nutrition.targets.proteinG} g protein.`)
+          else lines.push(s.meals.length ? `Food ${label}: ${s.meals.map((m) => `${slotLabel(m.slot as Meal['slot'])} ${m.name}`).join(' · ')}, ${s.calories.toLocaleString()} kcal and ${s.proteinG} g protein.` : `No meals logged ${label}.`)
+        } else if (intent.mode !== 'upcoming') {
+          const kcal = foodDays.reduce((a, s) => a + s.calories, 0)
+          lines.push(foodDays.length ? `Food ${label}: ${plural(foodDays.reduce((a, s) => a + s.meals.length, 0), 'meal')} across ${plural(foodDays.length, 'day')}, ${kcal.toLocaleString()} kcal in total.` : `No meals in the journal ${label}.`)
+        }
+      }
+      const ci = single ? summaries[0].checkIn : undefined
+      const readinessLine = ci && intent.domain === 'all' && intent.mode !== 'upcoming' ? `Check-in: ${[ci.sleepHours !== undefined && `${ci.sleepHours} h sleep`, ci.energy !== undefined && `energy ${ci.energy}/10`, ci.fatigue !== undefined && `fatigue ${ci.fatigue}/10`].filter(Boolean).join(', ')}.` : undefined
+      const refs = [...completed, ...planned].slice(0, 3).map((w) => ({ type: 'workout' as const, id: w.id, label: w.title }))
+      return {
+        text: voice.compose({ core: lines.join(' '), reason: readinessLine, calm: 'The record speaks for itself.', quip: 'I keep receipts.' }),
+        cards: single && (completed[0] ?? planned[0]) ? [workoutCard(ctx.workouts.find((w) => w.id === (completed[0] ?? planned[0]).id)!)] : undefined,
+        suggestions: intent.frame === 'today' ? ['What’s on tomorrow?', 'How am I progressing?', 'What have I eaten today?'] : ['What did I do today?', 'How am I progressing?', 'Plan my week'],
+        references: refs,
+        contextPatch: { topic: intent.domain === 'food' ? 'nutrition' : 'calendar', ...(refs[0] ? { lastWorkoutId: refs[0].id } : {}) },
+        thinkMs: 500,
+      }
+    }
+
+    case 'delete_workout': {
+      // Resolve the reference from the words first, then from the conversation, and ask when it is ambiguous.
+      const plannedAll = ctx.workouts.filter((w) => w.status === 'planned' && w.scheduledFor >= today).sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor))
+      let target: Workout | undefined
+      if (intent.when === 'tomorrow') target = plannedAll.find((w) => w.scheduledFor === ctx.time.tomorrow)
+      else if (intent.when === 'today') target = plannedAll.find((w) => w.scheduledFor === today)
+      else if (intent.weekday !== undefined) target = plannedAll.find((w) => fromDayKey(w.scheduledFor).getDay() === intent.weekday)
+      else if (ctx.contextWorkout && ctx.contextWorkout.status === 'planned') target = ctx.contextWorkout
+      else if (plannedAll.length === 1) target = plannedAll[0]
+      if (!target) {
+        if (!plannedAll.length) return { text: voice.compose({ core: 'There is no planned workout to remove right now.' }), suggestions: ['Show my calendar', 'Plan my week'] }
+        // Offer the coming week only, one session per weekday, with dates so “Monday” is unambiguous.
+        const windowEnd = dayKey(addDays(ctx.now, 6))
+        const seen = new Set<number>()
+        const options = plannedAll.filter((w) => w.scheduledFor <= windowEnd && !seen.has(fromDayKey(w.scheduledFor).getDay()) && seen.add(fromDayKey(w.scheduledFor).getDay())).slice(0, 4)
+        return {
+          text: voice.compose({ core: `Which one? ${options.map((w) => `${weekdayName(fromDayKey(w.scheduledFor), true)} ${formatShortDate(fromDayKey(w.scheduledFor))}: ${w.title}`).join(' · ')}.`, reason: 'I will not guess which session to delete.' }),
+          suggestions: options.map((w) => `Delete ${weekdayName(fromDayKey(w.scheduledFor))}'s workout`),
+          references: options.map((w) => ({ type: 'workout' as const, id: w.id, label: w.title })),
+          contextPatch: { topic: 'calendar' },
+        }
+      }
+      return {
+        text: voice.compose({ core: `Removed ${target.title} from ${weekdayName(fromDayKey(target.scheduledFor))}. The calendar is updated.`, reason: target.programId ? 'Your program keeps its other sessions.' : undefined, calm: 'Done.', push: 'Gone. Make the next one count.' }),
+        actions: [{ type: 'remove_workout', workoutId: target.id }],
+        suggestions: ['Show my calendar', 'Plan my week', 'Build a new workout'],
+        contextPatch: { lastWorkoutId: undefined, topic: 'calendar' },
+        thinkMs: 400,
       }
     }
 

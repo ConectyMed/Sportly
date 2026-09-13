@@ -11,6 +11,7 @@ import { getExercise, MUSCLE_LABELS } from '@/domain/exercises'
 import { FOCUS_LABELS } from '@/domain/labels'
 import { formatDate, fromDayKey, isToday } from '@/lib/dates'
 import { formatMinutes } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 export function WorkoutDetailScreen() {
@@ -18,7 +19,7 @@ export function WorkoutDetailScreen() {
   const navigate = useNavigate()
   const workout = useStore((s) => (id ? s.workouts[id] : undefined))
   const startWorkout = useStore((s) => s.startWorkout)
-  const skipWorkout = useStore((s) => s.skipWorkout)
+  const skipWorkout = (workoutId: string) => userAction({ type: 'skip_workout', workoutId })
   const coachName = useStore((s) => s.coach.name)
   const [changeOpen, setChangeOpen] = useState(false)
   const [swapOpen, setSwapOpen] = useState(false)

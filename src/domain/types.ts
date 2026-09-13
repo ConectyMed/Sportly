@@ -124,6 +124,76 @@ export interface MemoryItem {
   source: 'onboarding' | 'conversation' | 'inferred' | 'user'
   createdAt: ISODate
   pinned?: boolean
+  /** Last time this memory was confirmed or edited. */
+  updatedAt?: ISODate
+  /** 0–1. Explicit statements are 1; inferred ones lower. */
+  confidence?: number
+  /** Temporary memories describe a passing situation; persistent ones describe the person. */
+  persistence?: 'persistent' | 'temporary'
+  expiresAt?: ISODate
+  /** Normalised subject words (“running”, “burpees”) used to detect contradictions. */
+  subjects?: string[]
+  /** Memory this one replaced after a contradiction. */
+  supersedes?: string
+}
+
+/* ------------------------------------------------------------------ Actions & audit */
+
+/** What a coach tool changed. Kept explicit so every surface can explain “what changed and why”. */
+export type DomainChangeType =
+  | 'PROFILE_UPDATED'
+  | 'AVAILABILITY_UPDATED'
+  | 'READINESS_UPDATED'
+  | 'GOAL_CREATED'
+  | 'GOAL_UPDATED'
+  | 'GOAL_DELETED'
+  | 'WORKOUT_CREATED'
+  | 'WORKOUT_UPDATED'
+  | 'WORKOUT_DELETED'
+  | 'WORKOUT_COMPLETED'
+  | 'WORKOUT_SKIPPED'
+  | 'WORKOUT_RESCHEDULED'
+  | 'PROGRAM_CREATED'
+  | 'PROGRAM_CANCELLED'
+  | 'NUTRITION_TARGET_UPDATED'
+  | 'MEAL_ADDED'
+  | 'MEAL_UPDATED'
+  | 'MEAL_DELETED'
+  | 'MEASUREMENT_LOGGED'
+  | 'EVENT_CREATED'
+  | 'EVENT_UPDATED'
+  | 'EVENT_DELETED'
+  | 'MEMORY_SAVED'
+  | 'MEMORY_REMOVED'
+  | 'COACH_UPDATED'
+  | 'NOTIFICATION_SENT'
+
+export type EntityType = 'user' | 'goal' | 'workout' | 'program' | 'nutrition_plan' | 'meal' | 'measurement' | 'check_in' | 'event' | 'memory' | 'coach' | 'notification'
+
+export interface EntityRef {
+  type: EntityType
+  id: string
+  label?: string
+}
+
+export interface DomainChange {
+  type: DomainChangeType
+  entity: EntityRef
+  summary: string
+}
+
+/** One executed (or failed) coach tool call. Stored on the message and in the audit log. */
+export interface ActionRecord {
+  id: string
+  tool: string
+  ok: boolean
+  summary: string
+  changes: DomainChange[]
+  error?: string
+  /** True when the call was recognised as a repeat and nothing new was changed. */
+  idempotent?: boolean
+  source: 'coach' | 'user' | 'system'
+  at: ISODate
 }
 
 export type AttachmentKind = 'image' | 'pdf' | 'document' | 'audio'
@@ -178,6 +248,10 @@ export interface Message {
   status?: 'sending' | 'sent' | 'error'
   /** Slot the coach is waiting to fill (e.g. a 1–10 fatigue rating). */
   expects?: ExpectSlot
+  /** Tool calls actually executed for this reply, with their real outcome. */
+  actions?: ActionRecord[]
+  /** Entities this reply talks about (for “it / that / this” resolution). */
+  references?: EntityRef[]
 }
 
 export type ExpectSlot =

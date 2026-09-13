@@ -2,6 +2,7 @@ import { findExerciseByName } from '@/domain/exercises'
 import type { EquipmentId, ExpectSlot, GoalType, Meal, WorkoutFocus } from '@/domain/types'
 import type { MealCorrection } from './food/foodAnalysis'
 import { findFoodsInText } from './food/foodDatabase'
+import { resolveTimeReference, type TimeFrame, type TimeMode } from './time'
 import { parseWeekday } from '@/lib/dates'
 
 export type Intent =
@@ -60,6 +61,9 @@ export type Intent =
   | { kind: 'dislike_exercise'; text: string }
   | { kind: 'goal_impact' }
   | { kind: 'tomorrow' }
+  /** What happened / was planned / was eaten in a timeframe (“what did I do yesterday?”). */
+  | { kind: 'day_report'; frame: TimeFrame; mode: TimeMode; domain: 'training' | 'food' | 'all' }
+  | { kind: 'delete_workout'; when?: 'today' | 'tomorrow'; weekday?: number }
   | { kind: 'energy_report'; value: number }
   | { kind: 'unknown' }
 
@@ -280,6 +284,13 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   }
 
   // ---- Food journal questions (before corrections, so a question never mutates the meal in context)
+  // ---- Temporal reports: what happened vs what was planned, for a given period.
+  const report = /\bwhat (did|have) i (do|done|train|trained|eat|eaten|had|have|log|logged)\b|\bwhat (was|were) (planned|scheduled|on the (plan|schedule|calendar))\b|\bwhat did i (do|eat|train)\b|\bhow did (yesterday|today|this week|last week|the week) go\b|\bwhat happened (yesterday|today|this week|last week)\b|\bdid i (train|work out|workout|eat well)\b/.test(t)
+  if (report) {
+    const time = resolveTimeReference(t) ?? { frame: 'today' as const, mode: /planned|scheduled|supposed|on the (plan|schedule)/.test(t) ? ('planned' as const) : ('did' as const) }
+    const domain = /\b(eat|eaten|ate|food|meal|meals)\b/.test(t) ? 'food' : /\b(train|trained|workout|work out|session|lift)\b/.test(t) ? 'training' : 'all'
+    if (!(time.frame === 'today' && domain === 'food' && time.mode === 'did')) return { kind: 'day_report', frame: time.frame, mode: time.mode, domain }
+  }
   if (/\b(what|everything) (have|did) i (eat|eaten|had|have)\b|\bwhat i'?ve eaten\b|\bmy (food|meals|intake) (today|so far)\b|\beaten today\b/.test(t)) return { kind: 'eaten_today' }
   if (/\b(how (much|many)|what'?s?)\b.*\b(protein|calories|kcal|carbs|fat)\b.*\b(left|remaining|to go|have i got)\b|\b(remaining|left)\b.*\b(protein|calories|kcal|carbs|fat|for today)\b|\bhow (am i|'?m i) doing on (food|protein|calories|nutrition)/.test(t)) {
     const macro = /protein/.test(t) ? 'protein' : /carb/.test(t) ? 'carbs' : /\bfat\b/.test(t) ? 'fat' : /calorie|kcal/.test(t) ? 'calories' : undefined
@@ -329,7 +340,8 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   const countDays = t.match(/\b(i can|i'?ll|i will|i'?m able to|able to|can only|only)\s+(?:only )?(?:train|work ?out|do|manage|make)\s+(\d|one|two|three|four|five|six)\s+(?:days?|times?|sessions?)\b/) ?? t.match(/\b(\d|one|two|three|four|five|six)\s+(?:days?|times?|sessions?)\s+(?:a|per|this|next)\s+week\b/)
   if (countDays && /train|work ?out|session|day|gym|week/.test(t) && !/program|goal|target/.test(t)) {
     const n = wordToNumber(countDays[2] ?? countDays[1])
-    if (n) return { kind: 'availability', count: n, scope: /this week|next week|only this/.test(t) ? 'week' : /always|usually|from now on|every week|going forward/.test(t) ? 'always' : opts.lastAvailabilityScope ?? 'week' }
+    // “this week” is a one-off; “four days a week / per week / from now on” is the standing schedule.
+    if (n) return { kind: 'availability', count: n, scope: /this week|next week|only this/.test(t) ? 'week' : /always|usually|from now on|every week|going forward|\ba week\b|per week|\/\s*week|each week|weekly/.test(t) ? 'always' : opts.lastAvailabilityScope ?? 'week' }
   }
   if (opts.lastAvailabilityScope && /^(actually|no,?|hmm,?)?\s*(make it|let'?s (do|say)|change (it|that) to)\s+(\d|one|two|three|four|five|six)\b/.test(t)) {
     const n = wordToNumber(t.match(/(\d|one|two|three|four|five|six)\b/)![1])
@@ -343,7 +355,11 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   if (dislike && !/(this|it|that|the (plan|program|workout))$/.test(dislike[1].trim())) return { kind: 'dislike_exercise', text: dislike[1].trim() }
   // “I changed my goal” is a request to set it (handled by the goal block below); “how does that affect my plan” is the impact question.
   if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|does (that|this) change (my|the) plan)\b/.test(t)) return { kind: 'goal_impact' }
-  if (/^(what about|what'?s|and|how about)\s+(?:(?:on|up|planned|happening|scheduled)\s+(?:for\s+)?)?tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have|doing|training) tomorrow|\b(am i|do i) (train|training|working out|lifting) tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'tomorrow' }
+  if (/^(what about|what'?s|and|how about)\s+(?:(?:on|up|planned|happening|scheduled)\s+(?:for\s+)?)?tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have|doing|training) tomorrow|\b(am i|do i) (train|training|working out|lifting) tomorrow/.test(t) && !/meal|eat|food/.test(t)) {
+    // “And tomorrow?” keeps the domain of what we were just talking about.
+    if (opts.topic === 'nutrition' && /^(and|what about|how about)\s+tomorrow/.test(t)) return { kind: 'day_report', frame: 'tomorrow', mode: 'upcoming', domain: 'food' }
+    return { kind: 'tomorrow' }
+  }
   const energy = t.match(/\b(?:my )?energy (?:is |at |level )?(?:a |an )?(10|[1-9])(?:\s*(?:\/|out of|of)\s*10)?\b/)
   if (energy) return { kind: 'energy_report', value: Number(energy[1]) }
 
@@ -368,7 +384,8 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   if (/\b(log|record|track|enter)\b.*\bweight\b/.test(t) || /^weigh[- ]?in/.test(t)) return { kind: 'log_weight_prompt' }
 
   // ---- Goals
-  if (/\b(goal|target|aim|want to (reach|get to|hit|weigh|be)|my new goal)\b/.test(t) && !/program|plan for|progress/.test(t)) {
+  const statesGoal = /\bi (want|would like|'d like|am trying|'m trying|need) to (build|gain|lose|get|improve|drop|put on|become|be)\b/.test(t) && !/\d/.test(t) && parseGoalType(t) !== undefined
+  if ((/\b(goal|target|aim|want to (reach|get to|hit|weigh|be)|my new goal)\b/.test(t) || statesGoal) && !/program|plan for|progress/.test(t)) {
     const metric = /bench/.test(t) ? 'bench_press' : /squat/.test(t) ? 'squat' : /deadlift/.test(t) ? 'deadlift' : /workouts?|sessions?|train/.test(t) && /week/.test(t) ? 'workouts_per_week' : /steps/.test(t) ? 'steps_per_day' : kg ? 'body_weight' : undefined
     const num = metric === 'workouts_per_week' ? parseDaysPerWeek(t) ?? Number(t.match(/(\d)\s*(?:workouts?|sessions?)/)?.[1]) : metric === 'steps_per_day' ? Number((t.match(/([\d,]{4,6})\s*steps/)?.[1] ?? '').replace(/,/g, '')) : kg ?? Number(t.match(/(\d{2,3})\s*(?:kg)?/)?.[1])
     return { kind: 'set_goal', goalType: parseGoalType(t), metric, target: Number.isFinite(num) && num ? num : undefined }
@@ -411,6 +428,11 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
 
   // ---- Workout: start / skip
   if (/^(start|begin|let'?s go|go|let'?s start|start it|start the workout|start workout|i'?m ready|ready)\b/.test(t) && !/program/.test(t)) return { kind: 'start_workout' }
+  if (/\b(delete|remove|cancel|drop|scrap)\b.*\b(workout|session|training)\b/.test(t) && !/program|plan\b|meal/.test(t)) {
+    const dayWord = t.match(/\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/)?.[1]
+    const weekday = dayWord ? parseWeekday(dayWord) : null
+    return { kind: 'delete_workout', when: /\btomorrow/.test(t) ? 'tomorrow' : /\btoday|this one|it\b/.test(t) ? 'today' : undefined, weekday: weekday ?? undefined }
+  }
   if (/\b(skip|not today|rest day|take today off|day off)\b/.test(t) && /(workout|session|today|it)/.test(t)) return { kind: 'skip_workout' }
 
   // ---- Workout: modifications (require a workout in context)
@@ -418,9 +440,11 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
     const eqOnly = /\b(only|just)\b.*\b(dumbbells?|barbell|kettlebells?|bands?|bodyweight|machines?|cables?)\b|\b(dumbbells?|bodyweight|bands?|kettlebells?) only\b|\bi (only )?have (a |some )?(dumbbells?|kettlebell|bands?|barbell)/.test(t)
     if (eqOnly) {
       const equipment = parseEquipment(t)
+      // “I only have 30 minutes and dumbbells”: two constraints at once → rebuild with both.
+      if (equipment && parseMinutes(t) && /\b(only|just)\s+(have|got)\b/.test(t)) return { kind: 'make_workout', constraints: { minutes: parseMinutes(t), equipment } }
       if (equipment) return { kind: 'modify_workout', change: { type: 'equipment', equipment } }
     }
-    if ((/\b(shorter|less time|quicker|faster|cut it down|trim|reduce)\b/.test(t) || (/\b(only have|just have|got)\b/.test(t) && parseMinutes(t))) && !/replace|swap/.test(t)) return { kind: 'modify_workout', change: { type: 'shorter', minutes: parseMinutes(t) } }
+    if ((/\b(shorter|shorten|less time|quicker|faster|cut it down|trim|reduce)\b/.test(t) || (/\b(only have|just have|got)\b/.test(t) && parseMinutes(t))) && !/replace|swap/.test(t)) return { kind: 'modify_workout', change: { type: 'shorter', minutes: parseMinutes(t) } }
     if (/\b(longer|more time|extend|add more)\b/.test(t)) return { kind: 'modify_workout', change: { type: 'longer', minutes: parseMinutes(t) } }
     const rep = t.match(/\b(replace|swap|switch|change|remove|drop|no|skip|don'?t want|hate|can'?t do)\b\s+(?:the\s+|out\s+)?([a-z][a-z\- ]{2,30}?)(?:\s+(?:with|for|please|today)\b|[.,!?]|$)/)
     if (rep && !/workout|session|cardio|it$/.test(rep[2].trim())) {
@@ -450,7 +474,11 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
     const h = t.match(/(\d(?:[.,]\d)?)\s*(?:hours?|hrs?|h\b)/)
     return { kind: 'slept_badly', hours: h ? Number(h[1].replace(',', '.')) : undefined }
   }
-  if (/\b(tired|exhausted|drained|wiped|knackered|fatigued|low energy|no energy|sluggish|worn out|beat|dead)\b/.test(t)) return { kind: 'tired', scale: opts.expects === 'fatigue_scale' ? parseScale(t) : undefined }
+  if (/\b(tired|exhausted|drained|wiped|knackered|fatigued|low energy|no energy|sluggish|worn out|beat|dead)\b/.test(t)) {
+    // “I'm exhausted today, 6 out of 10” carries its own rating.
+    const inline = t.match(/\b(10|[1-9])\s*(?:\/|out of|on)\s*10\b/)
+    return { kind: 'tired', scale: opts.expects === 'fatigue_scale' ? parseScale(t) : inline ? Number(inline[1]) : undefined }
+  }
   if (/\b(feel(ing)? (great|amazing|strong|fresh|good|energi[sz]ed)|full of energy|ready to go|fired up|slept (great|well|amazing))\b/.test(t)) return { kind: 'feeling_good' }
   if (/\b(what should i do|what'?s (today|the plan|on today|next)|plan for today|today'?s plan|what do i do|what'?s up today|what are we doing)\b/.test(t) || /^(today|today\?)$/.test(t)) return { kind: 'today_plan' }
 
@@ -588,4 +616,57 @@ export function parseMealCorrections(raw: string): MealCorrection[] {
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
+}
+
+/* ------------------------------------------------------------------ Compound requests */
+
+export interface CompoundPart {
+  text: string
+  intent: Intent
+}
+
+/** Intents that make sense as one step of a multi-part request, with their execution order. */
+const COMPOUND_ORDER: Partial<Record<Intent['kind'], number>> = {
+  set_goal: 1,
+  goal_delta: 1,
+  availability: 2,
+  remember: 3,
+  personality: 3,
+  rename_coach: 3,
+  dislike_exercise: 3,
+  log_weight: 4,
+  tired: 4,
+  slept_badly: 4,
+  energy_report: 4,
+  make_workout: 5,
+  modify_workout: 5,
+  create_program: 6,
+  nutrition: 7,
+  food_log: 7,
+  reschedule: 8,
+  plan_week: 8,
+}
+
+/**
+ * Split “I want to build muscle, train four days a week, and create a 12-week
+ * program” into ordered parts. Returns undefined unless at least two distinct
+ * actionable requests are found, so ordinary sentences are never chopped up.
+ */
+export function splitCompound(text: string, opts: ParseOptions): CompoundPart[] | undefined {
+  if (opts.expects) return undefined
+  const clauses = text
+    .split(/\s*[,;]\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?(?=i\b|i'|train|create|make|plan|build|remember|set|log|give|move|call|be\b|eat|only|also|my|make)|\s+then\s+/i)
+    .map((c) => c.trim())
+    .filter((c) => c.length > 2)
+  if (clauses.length < 2) return undefined
+  const parts: CompoundPart[] = []
+  for (const clause of clauses) {
+    const intent = parseIntent(clause, { topic: opts.topic })
+    const order = COMPOUND_ORDER[intent.kind]
+    if (order === undefined) continue
+    if (parts.some((p) => p.intent.kind === intent.kind)) continue
+    parts.push({ text: clause, intent })
+  }
+  if (parts.length < 2) return undefined
+  return parts.sort((a, b) => (COMPOUND_ORDER[a.intent.kind] ?? 9) - (COMPOUND_ORDER[b.intent.kind] ?? 9))
 }

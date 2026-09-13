@@ -6,6 +6,7 @@ import { Chip, Tag } from '@/components/ui/Chip'
 import { MEAL_SLOT_LABELS } from '@/domain/labels'
 import type { CoachCard, FoodItem, LoggedMeal } from '@/domain/types'
 import { cn } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 const frame = 'rounded-[20px] border border-border bg-surface overflow-hidden'
@@ -24,8 +25,9 @@ function portionText(i: FoodItem): string {
 export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text: string) => void }) {
   const navigate = useNavigate()
   const meal = useStore((s) => (card.refId ? s.meals[card.refId] : undefined))
-  const upsertMeal = useStore((s) => s.upsertMeal)
-  const deleteMeal = useStore((s) => s.deleteMeal)
+  // Edits go through the same tools the coach uses (validated, audited, never duplicated).
+  const upsertMeal = (m: LoggedMeal) => userAction({ type: 'update_meal', meal: m })
+  const deleteMeal = (mealId: string) => userAction({ type: 'delete_meal', mealId })
   const activeConversationId = useStore((s) => s.activeConversationId)
   const updateConversationContext = useStore((s) => s.updateConversationContext)
 

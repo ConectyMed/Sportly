@@ -9,8 +9,9 @@ import { generateProgram, materializeProgram } from '@/coach/programGenerator'
 import { generateNutritionPlan } from '@/coach/nutritionGenerator'
 import { generateInsights, consistencyStreak } from '@/coach/insights'
 import { buildVoice } from '@/coach/personality'
+import { buildContext } from '@/coach/coachService'
 import { todayKey } from '@/lib/dates'
-import { selectDailyNutrition } from '@/store/selectors'
+import { useStore } from '@/store/useStore'
 
 const seed = buildDemoSeed()
 
@@ -20,29 +21,18 @@ const todayWorkout = (() => {
 })()
 
 function ctx(overrides: Partial<CoachContext> = {}): CoachContext {
+  // The real context builder over the real store, with the deterministic test workout as today's session.
   const workouts = [...Object.values(seed.workouts).filter((w) => w.scheduledFor !== todayKey()), todayWorkout]
-  const conversation = seed.conversations[0]
+  useStore.getState().seed({ ...seed, workouts: Object.fromEntries(workouts.map((w) => [w.id, w])), nutritionPlans: {} })
+  const state = useStore.getState()
+  const conversation = state.conversations[0]
   return {
-    now: new Date(),
-    user: seed.user,
-    goals: seed.goals,
-    coach: seed.coach,
-    memory: seed.memory,
+    ...buildContext(state, conversation),
     readiness: computeReadiness(seed.checkIns[todayKey()], workouts),
-    todayCheckIn: seed.checkIns[todayKey()],
     todayWorkout,
     contextWorkout: todayWorkout,
     activeProgram: undefined,
     todayNutrition: undefined,
-    nutrition: selectDailyNutrition({ meals: seed.meals ?? {}, nutritionPlans: seed.nutritionPlans ?? {}, workouts: Object.fromEntries(workouts.map((w) => [w.id, w])), user: seed.user, goals: seed.goals }),
-    contextMeal: undefined,
-    foodVision: false,
-    workouts,
-    events: seed.events,
-    measurements: seed.measurements,
-    checkIns: seed.checkIns,
-    conversation,
-    history: seed.messages[conversation.id],
     insights: [],
     targetPerWeek: 4,
     ...overrides,

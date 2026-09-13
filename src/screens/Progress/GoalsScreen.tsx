@@ -11,6 +11,7 @@ import { Sheet } from '@/components/ui/Sheet'
 import { GOAL_DESCRIPTIONS, GOAL_LABELS } from '@/domain/labels'
 import type { Goal, GoalType } from '@/domain/types'
 import { uid } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 const GOAL_TYPES = Object.keys(GOAL_LABELS) as GoalType[]
@@ -29,9 +30,9 @@ export function GoalsScreen() {
   const user = useStore((s) => s.user)!
   const measurements = useStore((s) => s.measurements)
   const workoutsMap = useStore((s) => s.workouts)
-  const upsertGoal = useStore((s) => s.upsertGoal)
-  const removeGoal = useStore((s) => s.removeGoal)
-  const addMemory = useStore((s) => s.addMemory)
+  const upsertGoal = (goal: Goal) => userAction({ type: 'set_goal', goal })
+  const removeGoal = (goalId: string) => userAction({ type: 'delete_goal', goalId })
+  const addMemory = (item: { category: 'goal'; text: string; source: 'user' }) => userAction({ type: 'remember', item })
   const coachName = useStore((s) => s.coach.name)
   const workouts = useMemo(() => Object.values(workoutsMap), [workoutsMap])
   const [editing, setEditing] = useState<Goal | null>(null)
@@ -61,7 +62,11 @@ export function GoalsScreen() {
       startValue: draft.metric === 'body_weight' ? (editing.startValue ?? user.weightKg) : editing.startValue,
       createdAt: editing.createdAt || new Date().toISOString(),
     }
-    upsertGoal(goal)
+    const saved = upsertGoal(goal)
+    if (!saved.ok) {
+      useStore.getState().toast(saved.summary, 'error')
+      return
+    }
     addMemory({ category: 'goal', text: `${goal.rank === 'primary' ? 'Primary' : 'Secondary'} goal: ${goal.label}${goal.targetValue ? ` (${goal.targetValue} ${goal.targetUnit})` : ''}`, source: 'user' })
     setEditing(null)
     useStore.getState().toast('Goal saved', 'success')

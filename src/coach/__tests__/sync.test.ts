@@ -207,7 +207,9 @@ describe('conversation → structured state', () => {
     await say('I can only train Monday, Wednesday and Friday from now on')
     expect(state().user!.availability.preferredDays).toEqual([1, 3, 5])
     expect(state().user!.availability.daysPerWeek).toBe(3)
-    expect(state().memory.some((m) => m.category === 'availability' && /monday/i.test(m.text))).toBe(true)
+    // New explicit information replaces the older availability memory instead of sitting next to it.
+    expect(state().memory.some((m) => m.category === 'availability' && /mon, wed, fri/i.test(m.text))).toBe(true)
+    expect(state().memory.some((m) => m.category === 'availability' && /tuesday/i.test(m.text))).toBe(false)
   })
 
   it('"I\'m tired today" then "7" updates the check-in and lightens today', async () => {

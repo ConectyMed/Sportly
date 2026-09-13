@@ -10,6 +10,7 @@ import { Sheet } from '@/components/ui/Sheet'
 import type { CalendarEvent } from '@/domain/types'
 import { addDays, dayKey, daysInMonth, formatDate, fromDayKey, monthName, startOfMonth, todayKey, weekdayName, WEEKDAY_SHORT } from '@/lib/dates'
 import { cn, formatMinutes } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 export function CalendarScreen() {
@@ -17,8 +18,8 @@ export function CalendarScreen() {
   const events = useStore((s) => s.events)
   const workouts = useStore((s) => s.workouts)
   const coachName = useStore((s) => s.coach.name)
-  const moveEvent = useStore((s) => s.moveEvent)
-  const skipWorkout = useStore((s) => s.skipWorkout)
+  const moveEvent = (eventId: string, toDate: string) => userAction({ type: 'move_event', eventId, toDate })
+  const skipWorkout = (workoutId: string) => userAction({ type: 'skip_workout', workoutId })
   const startWorkout = useStore((s) => s.startWorkout)
   const today = todayKey()
   const [month, setMonth] = useState(() => startOfMonth(new Date()))
@@ -170,10 +171,10 @@ export function CalendarScreen() {
                 <button
                   key={key}
                   onClick={() => {
-                    if (moving) moveEvent(moving.id, key)
+                    const moved = moving ? moveEvent(moving.id, key) : undefined
                     setSelected(key)
                     setMoving(null)
-                    useStore.getState().toast(`Moved to ${weekdayName(d)}`, 'success')
+                    if (moved) useStore.getState().toast(moved.ok ? `Moved to ${weekdayName(d)}` : moved.summary, moved.ok ? 'success' : 'error')
                   }}
                   className="w-full flex items-center justify-between rounded-[14px] bg-surface border border-border px-4 py-3 hover:border-border-strong text-left"
                 >

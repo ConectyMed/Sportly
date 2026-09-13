@@ -33,6 +33,26 @@ On first launch choose **Meet your coach** (onboarding) or **Explore with a demo
 
 Food and living state: “I ate 200 g chicken, rice and broccoli” · “There was more rice” · “I only ate half” · “Remove the sauce” · “Add it to lunch” · “What have I eaten today?” · “How much protein do I have left?” · “What would you choose: salmon, pasta or a burger?” · “I want to gain 5 kg” · “How does that affect my plan?” · “I can train four days this week” → “Actually make it three” · “I just finished my workout” · “Never give me burpees”.
 
+## Ready for a real AI brain (V5)
+
+Sportly is an AI coach whose application is its body. The local engine is the brain today; a model can replace it tomorrow without touching the domain, because the seams are explicit:
+
+```
+USER → CONVERSATION → provider (understanding: intent → proposed tool calls)
+     → COACH ORCHESTRATOR (src/coach/coachService.ts)
+     → SPORTLY TOOLS (src/coach/tools: validation → execution → idempotency → audit)
+     → single store → derived state (selectors) → refreshed CoachContext → honest response
+```
+
+- **Single source of truth.** `useStore` holds every entity once. `CoachContextSnapshot` (`src/coach/context.ts`) is derived from it on every turn and never stored: profile, goals with progress, training, readiness, nutrition (derived from logged meals), progress, calendar, program, memory and conversation references. Priority is enforced by construction: structured state first, then recent actions, then conversation, then memory, then history.
+- **Tools, not mutations.** Read tools (`get_user_context`, `get_today`, `get_remaining_nutrition`, `search_knowledge`, …) and action tools (`create_workout`, `complete_workout`, `reschedule_workout`, `log_meal`, `set_goal`, `remember`, …) have typed inputs and outputs (`ToolResult`), validate against the current store, refuse impossible or ambiguous requests with a reason, and report exactly what changed (`DomainChange`). The registry adds a repeat window on top of per-entity checks, so a retried request never creates a duplicate, and records every call in a persisted action log.
+- **Honest responses.** A reply carries the actions that were really executed (`Message.actions`). If a tool fails, the orchestrator appends what did not go through; the coach never says “done” for something that did not happen. Tests enforce a NO-LIE rule (every claim of change is backed by an executed action) and a NO-DEAD-END rule (every suggestion chip resolves to a real intent).
+- **Temporal context.** `src/coach/time.ts` distinguishes today, yesterday, tomorrow, this week and next week, and “what did I do” from “what was planned” from “what is coming”.
+- **Multi-action requests.** “I want to build muscle, train four days a week, and create a 12-week program” is split into ordered steps, each executed with a refreshed context so the program sees the new goal and schedule.
+- **Memory with rules.** Memories carry confidence, persistence (persistent vs temporary), expiry and subjects. New explicit information replaces a contradicting older memory (“prefers running” → “hates running”). Passing states (“tired today”) are check-ins, not memories.
+- **Provider contract.** `CoachModelInput` (system instructions, context snapshot, conversation, tool descriptors from `describeTools()`) and `CoachModelOutput` (message, tool calls, references, follow-ups) are plain data. `LocalCoachProvider` stays honest about being rule-based; the optional bring-your-own-key provider maps model tool calls onto the same engine.
+- **Knowledge, separate from behaviour.** `src/knowledge` defines `KnowledgeSource` / `KnowledgeDocument` / `KnowledgeChunk` with provenance and a `KnowledgeRetriever` interface, seeded with concise coaching notes. A richer package plugs in as another source.
+
 ## Food scan and one living state
 
 - **Food journal.** A meal described in chat (or a photo plus a description) becomes a `LoggedMeal` with per-item portions, macros and a confidence level. Corrections in chat and edits in the card or the Nutrition sheet mutate the same entity, never a copy. Daily totals are never stored: `selectDailyNutrition` derives consumed and remaining from the meals, so Coach, Nutrition and Home cannot disagree.
@@ -58,7 +78,9 @@ UI (React screens & components)
 | State | `src/store/useStore.ts` | Single persisted store with typed actions. `src/store/selectors.ts` derives daily nutrition from logged meals. `src/store/attachments.ts` keeps binaries in IndexedDB. |
 | Food | `src/coach/food/` | `foodDatabase.ts` (per-100 g reference with aliases), `foodAnalysis.ts` (portion parsing, corrections, `FoodAnalysisProvider` local and vision implementations). |
 | Coach engine | `src/coach/` | `intents.ts` (context-aware parsing incl. slot answers like “6”), `localProvider.ts` (responses + actions + cards), `workoutGenerator.ts`, `programGenerator.ts`, `nutritionGenerator.ts`, `readiness.ts`, `insights.ts`, `personality.ts` (the four dials shape every reply). |
-| Orchestration | `src/coach/coachService.ts` | `sendMessage`, `applyActions`, first conversation, quick actions, workout completion, contextual notifications. |
+| Orchestration | `src/coach/coachService.ts` | The pipeline: normalise → split compound requests → context → provider → tools → honest reply. Also first conversation, quick actions, contextual notifications. |
+| Coach tools | `src/coach/tools/` | `contracts.ts` (ToolResult, ToolDescriptor), `readTools.ts`, `actionTools.ts`, `registry.ts` (idempotency, audit log, tool descriptions). `src/coach/context.ts` builds the `CoachContextSnapshot`; `src/coach/time.ts` the temporal context; `src/coach/memory.ts` the memory rules. |
+| Knowledge | `src/knowledge/` | Document / chunk / source types, a local keyword retriever and seed coaching notes with provenance. |
 | Remote AI | `src/coach/anthropicProvider.ts` | Optional bring-your-own-key provider. The model chooses tools; Sportly’s engine materialises the entities so state stays consistent. Falls back to the local coach on any failure. |
 | UI kit | `src/components/ui`, `src/components/charts` | Buttons, cards, sheets, sliders, segmented controls, chips, toasts, rings, dependency-free SVG charts. |
 | Screens | `src/screens/*` | Onboarding, Home, Coach, Workout (detail / live session / summary), Nutrition, Progress, Goals, Program, Calendar, Notifications, Profile sections. |

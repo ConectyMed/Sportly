@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { createJSONStorage, persist } from 'zustand/middleware'
 import type {
+  ActionRecord,
   AppNotification,
   CalendarEvent,
   CoachConfig,
@@ -101,6 +102,8 @@ export interface AppState {
   notifications: AppNotification[]
   preferences: Preferences
   lastNotificationSweep?: string
+  /** Audit trail of coach tool calls (newest first, capped). Explains what changed and when. */
+  actionLog: ActionRecord[]
   /** Ephemeral UI state (not persisted). */
   ui: {
     coachTyping: boolean
@@ -179,6 +182,9 @@ export interface AppState {
   clearNotifications: () => void
   setNotificationSweep: (key: string) => void
 
+  // ---- audit
+  appendActionLog: (record: ActionRecord) => void
+
   // ---- preferences
   updatePreferences: (patch: Partial<Preferences>) => void
   updateNotificationPreferences: (patch: Partial<Preferences['notifications']>) => void
@@ -205,6 +211,7 @@ const initialData = () => ({
   events: [] as CalendarEvent[],
   notifications: [] as AppNotification[],
   preferences: DEFAULT_PREFERENCES,
+  actionLog: [] as ActionRecord[],
   lastNotificationSweep: undefined as string | undefined,
   ui: { coachTyping: false },
 })
@@ -485,6 +492,8 @@ export const useStore = create<AppState>()(
       clearNotifications: () => set({ notifications: [] }),
       setNotificationSweep: (key) => set({ lastNotificationSweep: key }),
 
+      appendActionLog: (record) => set((s) => ({ actionLog: [record, ...s.actionLog].slice(0, 200) })),
+
       updatePreferences: (patch) => set((s) => ({ preferences: { ...s.preferences, ...patch } })),
       updateNotificationPreferences: (patch) =>
         set((s) => ({ preferences: { ...s.preferences, notifications: { ...s.preferences.notifications, ...patch } } })),
@@ -500,10 +509,12 @@ export const useStore = create<AppState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 2,
+      version: 3,
       migrate: (persisted) => {
+        // v1 → v2 added the food journal; v2 → v3 added the action audit log.
+        // Both are additive: older snapshots keep every entity they had.
         const p = (persisted ?? {}) as Partial<AppState>
-        return { ...p, meals: p.meals ?? {} } as AppState
+        return { ...p, meals: p.meals ?? {}, actionLog: Array.isArray(p.actionLog) ? p.actionLog : [] } as AppState
       },
       storage: createJSONStorage(() => localStorage),
       partialize: (s) => {
@@ -518,6 +529,7 @@ export const useStore = create<AppState>()(
           ...current,
           ...p,
           meals: p.meals ?? {},
+          actionLog: Array.isArray(p.actionLog) ? p.actionLog : [],
           coach: { ...DEFAULT_COACH, ...(p.coach ?? {}), personality: { ...DEFAULT_PERSONALITY, ...(p.coach?.personality ?? {}) } },
           preferences: {
             ...DEFAULT_PREFERENCES,

@@ -1,23 +1,35 @@
-import type { Attachment, CalendarEvent, Conversation, Message, Workout, WorkoutSummary } from '@/domain/types'
+import type { ActionRecord, Attachment, Conversation, EntityRef, Message, Workout, WorkoutSummary } from '@/domain/types'
 import { GOAL_LABELS } from '@/domain/labels'
-import { addDays, dayKey, diffDays, formatShortDate, timeOfDayGreeting, todayKey } from '@/lib/dates'
+import { addDays, dayKey, diffDays, timeOfDayGreeting, todayKey } from '@/lib/dates'
 import { formatMinutes, sleep, uid } from '@/lib/utils'
 import { fileToDataUrl, loadAttachmentBlob } from '@/store/attachments'
 import { selectDailyNutrition } from '@/store/selectors'
 import { useStore, type AppState } from '@/store/useStore'
 import { AnthropicCoachProvider } from './anthropicProvider'
+import { buildContextSnapshot } from './context'
 import { AnthropicVisionFoodProvider, LocalFoodAnalysisProvider, type FoodAnalysis, type FoodAnalysisProvider } from './food/foodAnalysis'
-import { detectPRs, generateInsights } from './insights'
+import { generateInsights } from './insights'
+import { splitCompound, type ParseOptions } from './intents'
 import { LocalCoachProvider } from './localProvider'
 import { generateNutritionPlan } from './nutritionGenerator'
 import { buildVoice } from './personality'
-import type { CoachAction, CoachContext, CoachProvider, CoachReply } from './provider'
+import type { CoachAction, CoachContext, CoachProvider, CoachReply, CoachResponse } from './provider'
 import { computeReadiness } from './readiness'
-import { generateWorkout, workoutVolume } from './workoutGenerator'
+import { buildTemporalContext } from './time'
+import { describeTools, executeActions } from './tools/registry'
+import { completeWorkoutRecord, ensureEventForWorkout } from './workoutCompletion'
+import { generateWorkout } from './workoutGenerator'
 
 /**
- * Coach orchestration: UI → this service → provider → actions applied to the store.
- * The provider never touches the store; it returns actions and this layer applies them.
+ * Coach orchestration. One pipeline, whatever the provider:
+ *
+ *   message → normalisation → (compound split) → context from live state
+ *   → provider (understanding + proposed tool calls) → tool execution
+ *   (validation, idempotency, audit) → derived state → context refresh
+ *   → response that only claims what really happened.
+ *
+ * The provider never touches the store. A future model replaces only the
+ * "understanding" step; everything else stays here.
  */
 
 const local = new LocalCoachProvider()
@@ -25,6 +37,8 @@ const localFood = new LocalFoodAnalysisProvider()
 
 /** Tests flip this off so conversations run without the simulated thinking pause. */
 export const serviceOptions = { simulateThinking: true }
+
+export { ensureEventForWorkout, describeTools }
 
 function hasVisionKey(state: Pick<AppState, 'coach'>): boolean {
   return state.coach.provider === 'anthropic' && Boolean(state.coach.anthropicApiKey)
@@ -63,6 +77,8 @@ async function analyzeAttachedFood(state: AppState, text: string, attachments: A
   return provider.analyze({ text, image: { attachment: image, base64, mediaType: image.mimeType } })
 }
 
+/* ------------------------------------------------------------------ Selectors */
+
 export function selectTodayWorkout(state: Pick<AppState, 'workouts'>, date = todayKey()): Workout | undefined {
   const list = Object.values(state.workouts).filter((w) => w.scheduledFor === date)
   return (
@@ -83,20 +99,26 @@ export function selectTodayNutrition(state: Pick<AppState, 'nutritionPlans'>, da
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0]
 }
 
-export function buildContext(state: AppState, conversation: Conversation): CoachContext {
+/* ------------------------------------------------------------------ Context */
+
+/** Everything the coach sees this turn, rebuilt from live state (never cached). */
+export function buildContext(state: AppState, conversation: Conversation, now = new Date()): CoachContext {
   const user = state.user!
   const workouts = Object.values(state.workouts)
-  const today = todayKey()
+  const time = buildTemporalContext(now)
+  const today = time.today
   const todayCheckIn = state.checkIns[today]
   const readiness = computeReadiness(todayCheckIn, workouts, today, user.sleepHoursTypical)
-  const todayWorkout = selectTodayWorkout(state)
-  const tomorrow = dayKey(addDays(new Date(), 1))
-  const tomorrowWorkout = workouts.find((w) => w.scheduledFor === tomorrow && w.status === 'planned')
+  const todayWorkout = selectTodayWorkout(state, today)
+  const tomorrowWorkout = workouts.find((w) => w.scheduledFor === time.tomorrow && w.status === 'planned')
+  // Conversational references: only honoured while the entity still exists (stale references are dropped).
   const contextWorkout = conversation.context.lastWorkoutId ? state.workouts[conversation.context.lastWorkoutId] : undefined
   const contextMeal = conversation.context.lastMealId ? state.meals[conversation.context.lastMealId] : undefined
   const targetPerWeek = user.availability.daysPerWeek
   return {
-    now: new Date(),
+    now,
+    time,
+    snapshot: buildContextSnapshot(state, conversation, now),
     user,
     goals: state.goals,
     coach: state.coach,
@@ -107,9 +129,10 @@ export function buildContext(state: AppState, conversation: Conversation): Coach
     tomorrowWorkout,
     contextWorkout: contextWorkout ?? todayWorkout,
     activeProgram: selectActiveProgram(state),
-    todayNutrition: selectTodayNutrition(state),
+    todayNutrition: selectTodayNutrition(state, today),
     nutrition: selectDailyNutrition(state, today),
     contextMeal,
+    meals: Object.values(state.meals),
     foodVision: hasVisionKey(state),
     workouts,
     events: state.events,
@@ -122,124 +145,32 @@ export function buildContext(state: AppState, conversation: Conversation): Coach
   }
 }
 
-export function applyActions(actions: CoachAction[] | undefined): void {
-  if (!actions?.length) return
-  const s = useStore.getState()
-  for (const a of actions) {
-    switch (a.type) {
-      case 'create_workout': {
-        if (a.replaceWorkoutId && a.replaceWorkoutId !== a.workout.id) {
-          const old = s.workouts[a.replaceWorkoutId]
-          if (old && old.status === 'planned') s.deleteWorkout(a.replaceWorkoutId)
-        }
-        // Keep one planned workout per day: retire other planned ones for that date.
-        for (const w of Object.values(useStore.getState().workouts)) {
-          if (w.id !== a.workout.id && w.scheduledFor === a.workout.scheduledFor && w.status === 'planned' && !w.programId) s.deleteWorkout(w.id)
-        }
-        s.upsertWorkout(a.workout)
-        ensureEventForWorkout(a.workout)
-        break
-      }
-      case 'update_workout':
-        s.upsertWorkout(a.workout)
-        ensureEventForWorkout(a.workout)
-        break
-      case 'skip_workout':
-        s.skipWorkout(a.workoutId)
-        break
-      case 'complete_workout':
-        completeWorkoutFromChat(a.workoutId)
-        break
-      case 'remove_workout': {
-        const w = useStore.getState().workouts[a.workoutId]
-        if (w && w.status === 'planned') {
-          s.deleteWorkout(a.workoutId)
-          for (const e of useStore.getState().events.filter((e) => e.workoutId === a.workoutId)) s.removeEvent(e.id)
-        }
-        break
-      }
-      case 'log_meal':
-        s.upsertMeal(a.meal)
-        break
-      case 'update_meal':
-        s.upsertMeal(a.meal)
-        break
-      case 'delete_meal':
-        s.deleteMeal(a.mealId)
-        break
-      case 'update_availability': {
-        const user = useStore.getState().user
-        if (user) s.updateUser({ availability: { ...user.availability, ...a.patch } })
-        break
-      }
-      case 'create_program': {
-        if (a.replaceProgramId) {
-          s.updateProgram(a.replaceProgramId, { status: 'cancelled' })
-          s.removeEventsForProgram(a.replaceProgramId, todayKey())
-        }
-        s.upsertProgram(a.program)
-        for (const w of a.workouts) s.upsertWorkout(w)
-        s.upsertEvents(a.events)
-        s.addNotification({ kind: 'plan_ready', title: `${a.program.name} is ready`, body: `${a.program.weeks} weeks, ${a.program.daysPerWeek} days a week. First session ${formatShortDate(a.program.startDate)}.`, action: { label: 'View program', to: `/program/${a.program.id}` } })
-        break
-      }
-      case 'cancel_program':
-        s.updateProgram(a.programId, { status: 'cancelled' })
-        s.removeEventsForProgram(a.programId, todayKey())
-        break
-      case 'create_nutrition_plan':
-        s.upsertNutritionPlan(a.plan)
-        break
-      case 'remember':
-        s.addMemory(a.item)
-        break
-      case 'forget':
-        s.removeMemory(a.memoryId)
-        break
-      case 'set_goal':
-        s.upsertGoal(a.goal)
-        break
-      case 'check_in':
-        s.setCheckIn(todayKey(), a.patch)
-        break
-      case 'move_event':
-        s.moveEvent(a.eventId, a.toDate)
-        break
-      case 'log_measurement':
-        s.addMeasurement(a.measurement)
-        break
-      case 'update_coach':
-        s.updateCoach(a.patch)
-        break
-      case 'update_user':
-        s.updateUser(a.patch)
-        break
-      case 'notify':
-        s.addNotification({ kind: 'insight', title: a.title, body: a.body })
-        break
-    }
-  }
+/* ------------------------------------------------------------------ Actions */
+
+/**
+ * Apply proposed actions through the tool registry. Returns the real outcome of
+ * each call; callers must speak from these records, never from the proposal.
+ */
+export function applyActions(actions: CoachAction[] | undefined, source: ActionRecord['source'] = 'coach'): ActionRecord[] {
+  return executeActions(actions, { source })
 }
 
-export function ensureEventForWorkout(workout: Workout): void {
-  const s = useStore.getState()
-  const existing = s.events.find((e) => e.workoutId === workout.id)
-  if (existing) {
-    if (existing.title !== workout.title || existing.date !== workout.scheduledFor) s.upsertEvent({ ...existing, title: workout.title, date: workout.scheduledFor })
-    return
-  }
-  const ev: CalendarEvent = {
-    id: uid('evt'),
-    type: 'workout',
-    date: workout.scheduledFor,
-    title: workout.title,
-    workoutId: workout.id,
-    programId: workout.programId,
-    status: workout.status === 'completed' ? 'completed' : workout.status === 'skipped' ? 'skipped' : 'planned',
-    createdAt: new Date().toISOString(),
-  }
-  s.upsertEvent(ev)
+/** Make the reply honest: it may only claim what the records confirm. */
+function reconcile(reply: CoachReply, records: ActionRecord[]): CoachReply {
+  const failed = records.filter((r) => !r.ok)
+  if (!failed.length) return reply
+  const lines = failed.map((f) => f.summary.replace(/\.$/, ''))
+  const note = failed.length === 1 ? `One thing did not go through: ${lines[0]}.` : `Some of that did not go through: ${lines.join('; ')}.`
+  return { ...reply, text: `${reply.text.trim()}\n\n${note}` }
 }
+
+function referencesFrom(reply: CoachReply, records: ActionRecord[]): EntityRef[] {
+  const out: EntityRef[] = [...(reply.references ?? [])]
+  for (const r of records) for (const c of r.changes) if (!out.some((x) => x.type === c.entity.type && x.id === c.entity.id)) out.push(c.entity)
+  return out
+}
+
+/* ------------------------------------------------------------------ Conversation */
 
 function activeConversation(): Conversation {
   const s = useStore.getState()
@@ -251,12 +182,26 @@ function activeConversation(): Conversation {
   return s.createConversation()
 }
 
+function conversationById(id: string): Conversation {
+  return useStore.getState().conversations.find((c) => c.id === id)!
+}
+
+/** Normalise what the user typed: trim, straighten smart punctuation, collapse whitespace. */
+export function normalizeMessage(text: string): string {
+  return text
+    .replace(/[’‘`´]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 let inflight = false
 
-export async function sendMessage(text: string, attachments: Attachment[] = []): Promise<void> {
-  const trimmed = text.trim()
-  if (!trimmed && !attachments.length) return
-  if (inflight) return
+/** One conversational turn. Resolves when the coach's reply is committed. */
+export async function sendMessage(text: string, attachments: Attachment[] = []): Promise<CoachResponse | undefined> {
+  const trimmed = normalizeMessage(text)
+  if (!trimmed && !attachments.length) return undefined
+  if (inflight) return undefined
   inflight = true
   const store = useStore.getState()
   const conversation = activeConversation()
@@ -274,26 +219,52 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
 
   try {
     const state = useStore.getState()
-    const conv = state.conversations.find((c) => c.id === conversation.id)!
-    const ctx = buildContext(state, conv)
     const provider = providerFor(state)
     const started = Date.now()
-    if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, ctx.foodVision ? 'Looking at your photo' : 'Reading your message')
+    if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, hasVisionKey(state) ? 'Looking at your photo' : 'Reading your message')
     const foodAnalysis = await analyzeAttachedFood(state, trimmed, attachments)
-    const reply = await provider.respond({ text: trimmed, attachments, context: ctx, foodAnalysis })
-    if (reply.status) useStore.getState().setCoachTyping(true, reply.status)
+
+    // A message can carry several requests. Each one gets a fresh context so the
+    // second request already sees what the first changed (goal → availability → program).
+    const lastCoach = [...(state.messages[conversation.id] ?? [])].reverse().find((m) => m.role === 'coach')
+    const parseOpts: ParseOptions = { expects: lastCoach?.expects, topic: conversation.context.topic, hasAttachments: attachments.length > 0 }
+    const parts = provider.id === 'local' && !attachments.length ? splitCompound(trimmed, parseOpts) : undefined
+    const turns = parts?.map((p) => p.text) ?? [trimmed]
+
+    const replies: CoachReply[] = []
+    const records: ActionRecord[] = []
+    let thinkMs = 0
+    for (let i = 0; i < turns.length; i++) {
+      const ctx = buildContext(useStore.getState(), conversationById(conversation.id))
+      const reply = await provider.respond({ text: turns[i], attachments: i === 0 ? attachments : [], context: ctx, foodAnalysis: i === 0 ? foodAnalysis : undefined })
+      if (reply.status) useStore.getState().setCoachTyping(true, reply.status)
+      const executed = applyActions(reply.actions)
+      records.push(...executed)
+      replies.push(reconcile(reply, executed))
+      if (reply.contextPatch) useStore.getState().updateConversationContext(conversation.id, reply.contextPatch)
+      thinkMs = Math.max(thinkMs, reply.thinkMs ?? 800)
+    }
+
     // Make the coach feel like it thinks — briefly, and only for the local engine.
-    const think = provider.id === 'local' && serviceOptions.simulateThinking ? (reply.thinkMs ?? 800) : 0
+    const think = provider.id === 'local' && serviceOptions.simulateThinking ? thinkMs : 0
     const elapsed = Date.now() - started
     if (think > elapsed) await sleep(think - elapsed)
-    applyActions(reply.actions)
-    commitReply(conversation.id, reply)
+
+    const last = replies[replies.length - 1]
+    const merged: CoachReply = {
+      ...last,
+      text: replies.map((r) => r.text.trim()).join('\n\n'),
+      cards: replies.flatMap((r) => r.cards ?? []),
+      references: replies.flatMap((r) => r.references ?? []),
+      contextPatch: undefined,
+    }
+    return commitReply(conversation.id, merged, records)
   } catch (err) {
     console.error('[coach] respond failed', err)
     const coach = useStore.getState().coach
     const voice = buildVoice(coach.personality)
-    commitReply(conversation.id, {
-      text: voice.compose({ core: 'Something went wrong on my side. Let’s try that again.', soft: 'Sorry,' }),
+    return commitReply(conversation.id, {
+      text: voice.compose({ core: 'Something went wrong on my side. Nothing was changed. Let’s try that again.', soft: 'Sorry,' }),
       suggestions: ['Try again', 'Build today’s workout'],
     })
   } finally {
@@ -302,21 +273,25 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
   }
 }
 
-function commitReply(conversationId: string, reply: CoachReply): void {
+function commitReply(conversationId: string, reply: CoachReply, records: ActionRecord[] = []): CoachResponse {
   const s = useStore.getState()
+  const references = referencesFrom(reply, records)
   const msg: Message = {
     id: uid('msg'),
     conversationId,
     role: 'coach',
     text: reply.text,
-    cards: reply.cards,
+    cards: reply.cards?.length ? reply.cards : undefined,
     suggestions: reply.suggestions,
     expects: reply.expects,
+    actions: records.length ? records : undefined,
+    references: references.length ? references : undefined,
     createdAt: new Date().toISOString(),
     status: 'sent',
   }
   s.addMessage(msg)
   if (reply.contextPatch) s.updateConversationContext(conversationId, reply.contextPatch)
+  return { message: reply.text, actions: records, references, suggestedFollowups: reply.suggestions ?? [], cards: reply.cards, expects: reply.expects }
 }
 
 /** Post a coach message directly (no user turn), e.g. after finishing a workout. */
@@ -358,7 +333,7 @@ export function startFirstConversation(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Quick actions used by screens (no conversation turn)
+// Quick actions used by screens (no conversation turn). They go through the same tools.
 // ---------------------------------------------------------------------------
 
 export function generateTodayWorkoutQuick(): Workout {
@@ -366,7 +341,7 @@ export function generateTodayWorkoutQuick(): Workout {
   const workouts = Object.values(s.workouts)
   const readiness = computeReadiness(s.checkIns[todayKey()], workouts, todayKey(), s.user!.sleepHoursTypical)
   const w = generateWorkout({ user: s.user!, goals: s.goals, history: workouts, readiness, seed: `${todayKey()}-${workouts.length}-quick` })
-  applyActions([{ type: 'create_workout', workout: w }])
+  applyActions([{ type: 'create_workout', workout: w }], 'user')
   return w
 }
 
@@ -376,68 +351,29 @@ export function ensureTodayNutrition() {
   if (existing) return existing
   const tw = selectTodayWorkout(s)
   const plan = generateNutritionPlan({ user: s.user!, goals: s.goals, isTrainingDay: Boolean(tw && tw.status !== 'skipped'), seed: `${todayKey()}-${s.user!.id}` })
-  s.upsertNutritionPlan(plan)
+  applyActions([{ type: 'create_nutrition_plan', plan }], 'system')
   return plan
 }
 
-/**
- * "I just finished my workout" from the chat: tick the remaining sets and complete
- * the session through the same path the workout screen uses, so streaks, calendar,
- * progress and memory all update identically. The coach's reply is the chat turn itself.
- */
-export function completeWorkoutFromChat(workoutId: string): WorkoutSummary | undefined {
-  const s = useStore.getState()
-  const w = s.workouts[workoutId]
-  if (!w || w.status === 'completed') return undefined
-  const ticked: Workout = {
-    ...w,
-    startedAt: w.startedAt ?? new Date(Date.now() - w.estimatedMinutes * 60_000).toISOString(),
-    exercises: w.exercises.map((e) => ({
-      ...e,
-      sets: e.sets.map((x) => (x.completed ? x : { ...x, completed: true, actualReps: x.actualReps ?? x.targetReps, actualWeightKg: x.actualWeightKg ?? x.targetWeightKg, actualSeconds: x.actualSeconds ?? x.targetSeconds })),
-    })),
-  }
-  s.upsertWorkout(ticked)
-  return finishWorkout(workoutId, undefined, undefined, { announce: false })
-}
-
+/** Finish a workout from the session screen: same completion path as the coach's tool, plus the coach's reaction. */
 export function finishWorkout(workoutId: string, feeling?: WorkoutSummary['feeling'], notes?: string, opts: { announce?: boolean } = {}): WorkoutSummary | undefined {
   const s = useStore.getState()
   const w = s.workouts[workoutId]
   if (!w) return undefined
-  const announce = opts.announce ?? true
-  const history = Object.values(s.workouts)
-  const startedAt = w.startedAt ? new Date(w.startedAt).getTime() : Date.now() - w.estimatedMinutes * 60_000
-  const durationSec = Math.max(60, Math.round((Date.now() - startedAt) / 1000))
-  const setsPlanned = w.exercises.reduce((a, e) => a + e.sets.length, 0)
-  const setsCompleted = w.exercises.reduce((a, e) => a + e.sets.filter((x) => x.completed).length, 0)
-  const exercisesCompleted = w.exercises.filter((e) => e.sets.some((x) => x.completed)).length
-  const prs = detectPRs(w, history)
-  const summary: WorkoutSummary = {
-    durationSec,
-    totalVolumeKg: workoutVolume(w),
-    setsCompleted,
-    setsPlanned,
-    exercisesCompleted,
-    prs: prs.map((p) => ({ exerciseId: p.exerciseId, name: p.name, weightKg: p.weightKg, reps: p.reps, e1rm: p.e1rm })),
-    feeling,
-    notes,
-  }
-  s.completeWorkout(workoutId, summary)
-  ensureEventForWorkout({ ...w, status: 'completed' })
-  if (feeling) s.addMemory({ category: 'reaction', text: `${w.title} on ${formatShortDate(new Date())} felt ${feeling}${notes ? `: ${notes}` : ''}`, source: 'inferred' })
-  if (!announce) return summary
-  // The coach acknowledges in the conversation.
+  const summary = completeWorkoutRecord(workoutId, feeling, notes)
+  if (!summary) return undefined
+  s.appendActionLog({ id: uid('act'), tool: 'complete_workout', ok: true, source: 'user', at: new Date().toISOString(), summary: `Completed ${w.title} (${summary.setsCompleted} of ${summary.setsPlanned} sets).`, changes: [{ type: 'WORKOUT_COMPLETED', entity: { type: 'workout', id: w.id, label: w.title }, summary: `${w.title} completed` }] })
+  if (opts.announce === false) return summary
   const voice = buildVoice(s.coach.personality)
-  const ratio = setsPlanned ? setsCompleted / setsPlanned : 1
+  const ratio = summary.setsPlanned ? summary.setsCompleted / summary.setsPlanned : 1
   const core =
     ratio >= 0.9
-      ? `${voice.cheer(workoutId)} ${w.title} done: ${setsCompleted} of ${setsPlanned} sets, ${Math.round(summary.totalVolumeKg).toLocaleString()} kg moved in ${formatMinutes(Math.round(durationSec / 60))}.`
-      : `${w.title} logged: ${setsCompleted} of ${setsPlanned} sets. A shorter session still counts.`
-  const prLine = prs.length ? `New best on ${prs.map((p) => `${p.name} (${p.weightKg} kg × ${p.reps})`).join(', ')}.` : undefined
+      ? `${voice.cheer(workoutId)} ${w.title} done: ${summary.setsCompleted} of ${summary.setsPlanned} sets, ${Math.round(summary.totalVolumeKg).toLocaleString()} kg moved in ${formatMinutes(Math.round(summary.durationSec / 60))}.`
+      : `${w.title} logged: ${summary.setsCompleted} of ${summary.setsPlanned} sets. A shorter session still counts.`
+  const prLine = summary.prs.length ? `New best on ${summary.prs.map((p) => `${p.name} (${p.weightKg} kg × ${p.reps})`).join(', ')}.` : undefined
   coachSays(
     voice.compose({ core, reason: prLine, extra: 'Eat within a couple of hours and prioritise protein tonight.', calm: 'Rest well.', push: 'Recover like it matters, because it does.', quip: 'Your muscles are filing a formal complaint. Approved.' }),
-    { suggestions: ['What should I eat now?', 'How did I do this week?', 'Plan tomorrow'] },
+    { suggestions: ['What should I eat now?', 'How did I do this week?', 'Plan tomorrow'], references: [{ type: 'workout', id: w.id, label: w.title }] },
   )
   return summary
 }

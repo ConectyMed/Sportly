@@ -17,6 +17,7 @@ import { DIET_LABELS, DIETARY_FLAG_LABELS, LEVEL_LABELS } from '@/domain/labels'
 import type { DietPreference, DietaryFlag, EquipmentId, FitnessLevel, MemoryCategory } from '@/domain/types'
 import { WEEKDAY_SHORT, relativeDay } from '@/lib/dates'
 import { cn, formatMinutes } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { STORAGE_KEY, useStore } from '@/store/useStore'
 
 export function ProfileSection() {
@@ -345,8 +346,11 @@ const CATEGORY_LABELS: Record<MemoryCategory, string> = {
 function MemorySection() {
   const memory = useStore((s) => s.memory)
   const coach = useStore((s) => s.coach)
-  const addMemory = useStore((s) => s.addMemory)
-  const removeMemory = useStore((s) => s.removeMemory)
+  const addMemory = (item: { category: MemoryCategory; text: string; source: 'user' }) => {
+    const r = userAction({ type: 'remember', item })
+    if (!r.ok) useStore.getState().toast(r.summary, 'error')
+  }
+  const removeMemory = (memoryId: string) => userAction({ type: 'forget', memoryId })
   const updateMemory = useStore((s) => s.updateMemory)
   const [text, setText] = useState('')
   const grouped = useMemo(() => {

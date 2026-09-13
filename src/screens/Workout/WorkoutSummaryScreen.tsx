@@ -8,6 +8,7 @@ import { Chip } from '@/components/ui/Chip'
 import { CoachMark } from '@/components/ui/Primitives'
 import type { WorkoutSummary } from '@/domain/types'
 import { formatMinutes } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 const FEELINGS: Array<{ v: NonNullable<WorkoutSummary['feeling']>; label: string }> = [
@@ -22,7 +23,6 @@ export function WorkoutSummaryScreen() {
   const navigate = useNavigate()
   const workout = useStore((s) => (id ? s.workouts[id] : undefined))
   const updateWorkout = useStore((s) => s.updateWorkout)
-  const addMemory = useStore((s) => s.addMemory)
   const coachName = useStore((s) => s.coach.name)
   const user = useStore((s) => s.user)!
   const workouts = useStore((s) => s.workouts)
@@ -45,7 +45,7 @@ export function WorkoutSummaryScreen() {
   const streak = consistencyStreak(Object.values(workouts), user.availability.daysPerWeek)
   const setFeeling = (v: WorkoutSummary['feeling']) => {
     updateWorkout(workout.id, { summary: { ...summary, feeling: v, notes: note || summary.notes } })
-    addMemory({ category: 'reaction', text: `${workout.title} felt ${v}${note ? `: ${note}` : ''}`, source: 'inferred' })
+    userAction({ type: 'remember', item: { category: 'reaction', text: `${workout.title} felt ${v}${note ? `: ${note}` : ''}`, source: 'inferred', persistence: 'temporary' } })
   }
 
   return (

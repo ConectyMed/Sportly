@@ -8,6 +8,7 @@ import { Sheet } from '@/components/ui/Sheet'
 import { MEAL_SLOT_LABELS } from '@/domain/labels'
 import type { LoggedMeal } from '@/domain/types'
 import { round } from '@/lib/utils'
+import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 const SLOTS: Array<LoggedMeal['slot']> = ['breakfast', 'lunch', 'dinner', 'snack', 'pre_workout', 'post_workout']
@@ -23,8 +24,9 @@ export function MealEditSheet({ mealId, onClose }: { mealId: string | null; onCl
 }
 
 function MealEditor({ meal, onClose }: { meal: LoggedMeal; onClose: () => void }) {
-  const upsertMeal = useStore((s) => s.upsertMeal)
-  const deleteMeal = useStore((s) => s.deleteMeal)
+  // Same tools as the coach: validated, audited, idempotent.
+  const upsertMeal = (m: LoggedMeal) => userAction({ type: 'update_meal', meal: m })
+  const deleteMeal = (mealId: string) => userAction({ type: 'delete_meal', mealId })
   // Keyed by meal id, so the portion stepper starts at 100% for each meal opened.
   const [scale, setScale] = useState(100)
 
