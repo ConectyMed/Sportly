@@ -76,14 +76,43 @@ describe('postgres adapter', () => {
     await expect(createPostgresStore(failing).spendTodayUsd(SUBJECT_A, 'coaching', '2026-01-01')).rejects.toMatchObject({ code: 'PERSISTENCE_FAILURE' })
   })
 
-  it('rate-limits mint attempts in one atomic statement', async () => {
-    const rec = recorder(() => [{ admitted: true }])
+  it('gates the mint limit on an UPDATE, not on a count-then-insert', async () => {
+    // A stub executor can only check the SQL's shape. What matters — that the
+    // limit actually holds when callers race — is unprovable here and is
+    // tested against a real Postgres in postgresConcurrency.test.ts.
+    const rec = recorder((t) => (t.startsWith('update') ? [{ n: 1 }] : []))
     expect(await createPostgresStore(rec.sql).admitMintAttempt('ip', 1_700_000_000_000)).toBe(true)
-    expect(rec.calls[0].text).toContain('sportly_mint_attempt')
-    expect(rec.calls[0].params[0]).toBe('ip')
 
-    const refused = recorder(() => [{ admitted: false }])
+    const gate = rec.calls.find((c) => c.text.trim().startsWith('update'))!
+    expect(gate.text).toContain('sportly_mint_bucket')
+    // The condition lives in the UPDATE's WHERE clause. That is what makes a
+    // blocked caller re-check against the committed row.
+    expect(gate.text).toMatch(/where\s+attempt_key = \$1 and \(window_start <= \$2 or n < \$4\)/)
+    expect(gate.params[0]).toBe('ip')
+
+    const refused = recorder(() => [])
     expect(await createPostgresStore(refused.sql).admitMintAttempt('ip', 1_700_000_000_000)).toBe(false)
+  })
+
+  it('gates spend admission on an UPDATE whose WHERE carries the cap', async () => {
+    const rec = recorder((t) => (t.includes('update sportly_spend_bucket') ? [{ admitted: true, spent: '0.10', hold_id: 'h1' }] : []))
+    const result = await createPostgresStore(rec.sql).admitSpend({
+      subjectId: SUBJECT_A, route: 'food_scan', day: '2026-01-01', capUsd: 0.25, holdUsd: 0.05, nowMs: 1_700_000_000_000, holdTtlMs: 120_000,
+    })
+    expect(result).toEqual({ admitted: true, spentUsd: 0.1, holdId: 'h1' })
+
+    const gate = rec.calls.find((c) => c.text.includes('update sportly_spend_bucket'))!
+    expect(gate.text).toContain('held_usd + committed_usd < $5')
+    expect(gate.text).not.toContain('pg_advisory')
+    expect(gate.params).toContain(SUBJECT_A)
+  })
+
+  it('uses no advisory locks anywhere — a statement snapshot predates any lock taken inside it', async () => {
+    const rec = recorder(() => [{ admitted: false, spent: '0', hold_id: null }])
+    const store = createPostgresStore(rec.sql)
+    await store.admitMintAttempt('ip', 1)
+    await store.admitSpend({ subjectId: SUBJECT_A, route: 'food_scan', day: '2026-01-01', capUsd: 1, holdUsd: 0.1, nowMs: 1, holdTtlMs: 1000 })
+    for (const call of rec.calls) expect(call.text).not.toContain('pg_advisory')
   })
 })
 

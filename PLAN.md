@@ -23,13 +23,15 @@
 8. `server/budget/` — per-route daily caps (food_scan, coaching, program), admitted BEFORE
    the provider request. Fails closed on an unpriced model (a null cost adds nothing to the
    day's spend), and takes an atomic hold so concurrent calls cannot all pass one check.
-   Refused ⇒ `BUDGET_EXCEEDED`, nothing sent.
+   Refused ⇒ `BUDGET_EXCEEDED`, nothing sent. Atomic means one `UPDATE` with the cap in
+   its `WHERE`, not a count-then-insert — an advisory lock does not fix the latter, because
+   the statement snapshot predates the lock.
 9. `server/boundary.ts` — the one path every model call takes: verify token → admit (price
    + cap + hold) → call provider (bounded retry) → write the log row and release the hold,
    on success AND on failure.
 10. `api/model/call.ts` is the single entry point for model calls; `api/identity/token.ts`
     mints. Both are thin: parse, delegate, map `BoundaryError` to a status.
-11. `migrations/0001_model_call_log.sql` — additive only: four new tables, nothing altered.
+11. `migrations/0001_model_call_log.sql` — additive only: five new tables, nothing altered.
 12. Bundle proof: `scripts/check-bundle-secrets.mjs` scans `dist/` for `SPORTLY_*` and
     key-shaped literals; wired into `pnpm build`. A test asserts every server-only var
     carries the prefix the scanner looks for, and that no file in `src/` imports `server/`.

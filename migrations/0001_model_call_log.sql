@@ -1,6 +1,6 @@
 -- V8a — provider boundary and cost control.
 --
--- Additive only. This migration creates four new tables and alters nothing.
+-- Additive only. This migration creates six new tables and alters nothing.
 -- Sportly's existing user data lives on-device (zustand + IndexedDB) and is
 -- untouched by anything here.
 --
@@ -15,17 +15,40 @@ create table if not exists sportly_subject (
 comment on table sportly_subject is
   'One row per subject, written once at first token mint (trust-on-first-use). The primary key is what makes the one-token-per-subject rule atomic.';
 
-create table if not exists sportly_mint_attempt (
-  id            bigserial   primary key,
-  attempt_key   text        not null,
-  attempted_at  timestamptz not null
+-- Counter rows, not ledgers-plus-count.
+--
+-- Both limiters below gate on a single UPDATE whose WHERE carries the
+-- condition. That is the only shape that holds under concurrency in READ
+-- COMMITTED: when such an UPDATE blocks on another transaction's row lock, it
+-- re-evaluates its WHERE against the *updated* row once that commits.
+--
+-- The obvious alternative — take an advisory lock, then count rows, then
+-- insert if under the limit — does NOT work, however the lock is scoped. A
+-- statement's snapshot is taken before the lock is acquired inside it, so
+-- after blocking the count still reads pre-lock state and every caller is
+-- admitted. Measured on Postgres 16: 19-20 of 20 mint attempts admitted
+-- against a limit of 5.
+
+create table if not exists sportly_mint_bucket (
+  attempt_key   text        primary key,
+  window_start  timestamptz not null,
+  n             integer     not null default 0
 );
 
-create index if not exists sportly_mint_attempt_key_time
-  on sportly_mint_attempt (attempt_key, attempted_at desc);
+comment on table sportly_mint_bucket is
+  'Fixed-window rate limit for the mint endpoint, which creates rows. One row per key; the gate is an UPDATE with the limit in its WHERE clause.';
 
-comment on table sportly_mint_attempt is
-  'Rate-limit ledger for the mint endpoint, which creates rows.';
+create table if not exists sportly_spend_bucket (
+  subject_id     uuid           not null,
+  route          text           not null check (route in ('food_scan', 'coaching', 'program')),
+  day            date           not null,
+  held_usd       numeric(12, 6) not null default 0,
+  committed_usd  numeric(12, 6) not null default 0,
+  primary key (subject_id, route, day)
+);
+
+comment on table sportly_spend_bucket is
+  'The authoritative admission counter: money already spent plus money reserved, for one subject, route and UTC day. Admission is an UPDATE gated on held_usd + committed_usd < cap, which is what makes the cap hold under concurrency.';
 
 create table if not exists sportly_spend_hold (
   hold_id     uuid        primary key default gen_random_uuid(),
@@ -39,8 +62,11 @@ create table if not exists sportly_spend_hold (
 create index if not exists sportly_spend_hold_bucket
   on sportly_spend_hold (subject_id, route, day);
 
+create index if not exists sportly_spend_hold_stale
+  on sportly_spend_hold (taken_at);
+
 comment on table sportly_spend_hold is
-  'Reservations taken at admission and released when the call settles. Without them the cap is a read-then-write and concurrent calls all pass the same check. A hold whose request died stops counting after its TTL.';
+  'One row per live reservation, so a hold whose request died can be found and given back to its bucket after its TTL. The bucket row is what admission reads; this table is how the bucket is repaired.';
 
 create table if not exists sportly_model_call_log (
   id                  bigserial   primary key,

@@ -104,87 +104,134 @@ export function createPostgresStore(sql: SqlExecutor, options: PostgresStoreOpti
     },
 
     async admitMintAttempt(key: string, nowMs: number): Promise<boolean> {
-      const since = new Date(nowMs - mintWindowMs).toISOString()
-      // Every CTE in a statement reads one snapshot, so under READ COMMITTED
-      // concurrent callers would all count the pre-insert state and all be
-      // admitted. The transaction-scoped advisory lock serialises callers that
-      // share a key, which is exactly the set that can race each other.
+      const now = new Date(nowMs).toISOString()
+      const windowStart = new Date(nowMs - mintWindowMs).toISOString()
+      await guard('admitMintAttempt.ensure', () =>
+        sql('insert into sportly_mint_bucket (attempt_key, window_start, n) values ($1, $2, 0) on conflict (attempt_key) do nothing', [key, now]),
+      )
+      // The gate. One UPDATE, condition in the WHERE: a caller that blocks on
+      // the row lock re-checks `n` against the committed row, so concurrent
+      // callers cannot all pass the same count.
       const res = await guard('admitMintAttempt', () =>
-        sql<{ admitted: boolean }>(
-          `with locked as (
-             select pg_advisory_xact_lock(hashtext('sportly_mint:' || $1)) as got
-           ), pruned as (
-             delete from sportly_mint_attempt
-             where attempt_key = $1 and attempted_at <= $2 and (select got is not null from locked)
-             returning 1
-           ), recent as (
-             select count(*)::int as n from sportly_mint_attempt
-             where attempt_key = $1 and attempted_at > $2 and (select count(*) from pruned) >= 0
-           ), ins as (
-             insert into sportly_mint_attempt (attempt_key, attempted_at)
-             select $1, $3 from recent where n < $4
-             returning 1
-           )
-           select exists (select 1 from ins) as admitted`,
-          [key, since, new Date(nowMs).toISOString(), mintLimit],
+        sql<{ n: number }>(
+          `update sportly_mint_bucket
+              set n = case when window_start <= $2 then 1 else n + 1 end,
+                  window_start = case when window_start <= $2 then $3 else window_start end
+            where attempt_key = $1 and (window_start <= $2 or n < $4)
+            returning n`,
+          [key, windowStart, now, mintLimit],
         ),
       )
-      return res.rows[0]?.admitted === true
+      return res.rows.length > 0
     },
 
     async admitSpend(request) {
-      // Same serialisation problem, same remedy: one advisory lock per
-      // (subject, route, day) so committed spend and live holds are counted
-      // and the new hold is taken without another caller slipping between.
-      const bucket = `sportly_spend:${request.subjectId}:${request.route}:${request.day}`
-      const staleBefore = new Date(request.nowMs - request.holdTtlMs).toISOString()
-      const res = await guard('admitSpend', () =>
-        sql<{ admitted: boolean; spent: string | number | null; hold_id: string | null }>(
-          `with locked as (
-             select pg_advisory_xact_lock(hashtext($1)) as got
-           ), expired as (
-             delete from sportly_spend_hold
-             where taken_at <= $2 and (select got is not null from locked)
-             returning 1
-           ), spent as (
-             select
-               coalesce((
-                 select sum(cost_usd) from sportly_model_call_log
-                 where subject_id = $3 and route = $4 and ts >= $5::timestamptz and ts < $5::timestamptz + interval '1 day'
-               ), 0)
-               + coalesce((
-                 select sum(hold_usd) from sportly_spend_hold
-                 where subject_id = $3 and route = $4 and day = $5::date
-               ), 0)
-               + (select count(*) from expired) * 0 as total
-           ), ins as (
-             insert into sportly_spend_hold (subject_id, route, day, hold_usd, taken_at)
-             select $3, $4, $5::date, $6, $7 from spent where total < $8
-             returning hold_id
-           )
-           select (select count(*) from ins) > 0 as admitted,
-                  (select total from spent) as spent,
-                  (select hold_id::text from ins) as hold_id`,
-          [bucket, staleBefore, request.subjectId, request.route, request.day, request.holdUsd, new Date(request.nowMs).toISOString(), request.capUsd],
-        ),
-      )
+      const takenAt = new Date(request.nowMs).toISOString()
+      const ensure = () =>
+        guard('admitSpend.ensure', () =>
+          sql('insert into sportly_spend_bucket (subject_id, route, day) values ($1, $2, $3::date) on conflict (subject_id, route, day) do nothing', [
+            request.subjectId,
+            request.route,
+            request.day,
+          ]),
+        )
+
+      /**
+       * The gate, and the reason the cap survives concurrency.
+       *
+       * `held_usd + committed_usd < cap` lives in the UPDATE's WHERE clause,
+       * not in a SELECT that ran beforehand. When two callers race, the second
+       * blocks on the first's row lock and Postgres re-evaluates the condition
+       * against the row the first committed. A read-then-check — including one
+       * wrapped in an advisory lock — cannot do this: the statement snapshot
+       * predates the lock, so the re-read sees stale state.
+       *
+       * The hold row is inserted in the same statement, from the gate's own
+       * RETURNING, so a hold exists if and only if the bucket was charged.
+       */
+      const gate = () =>
+        guard('admitSpend', () =>
+          sql<{ admitted: boolean; spent: string | number | null; hold_id: string | null }>(
+            `with gate as (
+               update sportly_spend_bucket
+                  set held_usd = held_usd + $4
+                where subject_id = $1 and route = $2 and day = $3::date
+                  and held_usd + committed_usd < $5
+               returning held_usd, committed_usd
+             ), ins as (
+               insert into sportly_spend_hold (subject_id, route, day, hold_usd, taken_at)
+               select $1, $2, $3::date, $4, $6 from gate
+               returning hold_id
+             )
+             select (select count(*) from gate) > 0 as admitted,
+                    coalesce(
+                      (select held_usd + committed_usd - $4 from gate),
+                      (select held_usd + committed_usd from sportly_spend_bucket where subject_id = $1 and route = $2 and day = $3::date),
+                      0
+                    ) as spent,
+                    (select hold_id::text from ins) as hold_id`,
+            [request.subjectId, request.route, request.day, request.holdUsd, request.capUsd, takenAt],
+          ),
+        )
+
+      /** Give a dead request's reservation back to its bucket. */
+      const reclaimStale = () =>
+        guard('admitSpend.reclaim', () =>
+          sql(
+            `with expired as (
+               delete from sportly_spend_hold where taken_at <= $1
+               returning subject_id, route, day, hold_usd
+             ), agg as (
+               select subject_id, route, day, sum(hold_usd) as total from expired group by 1, 2, 3
+             )
+             update sportly_spend_bucket b
+                set held_usd = greatest(0, b.held_usd - agg.total)
+               from agg
+              where b.subject_id = agg.subject_id and b.route = agg.route and b.day = agg.day`,
+            [new Date(request.nowMs - request.holdTtlMs).toISOString()],
+          ),
+        )
+
+      await ensure()
+      let res = await gate()
+      if (res.rows[0]?.admitted !== true) {
+        // Only worth sweeping when we are actually at the cap, so the happy
+        // path stays at two statements.
+        await reclaimStale()
+        res = await gate()
+      }
       const row = res.rows[0]
       return { admitted: row?.admitted === true, spentUsd: Number(row?.spent ?? 0), holdId: row?.hold_id ?? null }
     },
 
     async settleSpend(holdId: string | null, row: ModelCallLogRow): Promise<void> {
+      // One statement: the row lands, its reservation is returned to the
+      // bucket, and the real cost is committed. The bucket update is relative
+      // (+/-) and row-locked, so concurrent settles compose correctly.
+      //
+      // A null cost (an unknown model) commits nothing — which is safe only
+      // because admission refuses unpriced models up front; see
+      // server/budget/check.ts.
       await guard('settleSpend', () =>
         sql(
           `with ins as (
              insert into sportly_model_call_log
-             (ts, subject_id, request_id, route, provider, model, task_type,
-              tokens_in, tokens_cached, tokens_out, cost_usd, cost_unknown_model,
-              latency_ms, retry_count, outcome, error_category)
+               (ts, subject_id, request_id, route, provider, model, task_type,
+                tokens_in, tokens_cached, tokens_out, cost_usd, cost_unknown_model,
+                latency_ms, retry_count, outcome, error_category)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
              returning 1
+           ), rel as (
+             delete from sportly_spend_hold
+             where $17::uuid is not null and hold_id = $17::uuid
+             returning hold_usd
            )
-           delete from sportly_spend_hold
-           where $17::uuid is not null and hold_id = $17::uuid and (select count(*) from ins) = 1`,
+           update sportly_spend_bucket b
+              set held_usd = greatest(0, b.held_usd - coalesce((select hold_usd from rel), 0)),
+                  committed_usd = b.committed_usd + coalesce($11, 0)
+            where b.subject_id = $2 and b.route = $4
+              and b.day = ($1::timestamptz at time zone 'UTC')::date
+              and (select count(*) from ins) = 1`,
           [
             row.ts, row.subjectId, row.requestId, row.route, row.provider, row.model, row.taskType,
             row.tokensIn, row.tokensCached, row.tokensOut, row.costUsd, row.costUnknownModel,
