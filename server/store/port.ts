@@ -53,9 +53,46 @@ export interface SpendAdmissionRequest {
   /** Worst case this one call is assumed to cost, held until it settles. */
   holdUsd: number
   nowMs: number
-  /** Holds older than this are treated as abandoned and stop counting. */
+  /**
+   * Holds older than this are abandoned and stop counting. See "Hold
+   * lifecycle" below and `HOLD_TTL_MS` in server/budget/caps.ts for how the
+   * number is chosen.
+   */
   holdTtlMs: number
 }
+
+/**
+ * Hold lifecycle — what happens when a hold is never resolved.
+ *
+ * A hold is taken by one function invocation, before the provider is called,
+ * and released by `settleSpend` in the same invocation. Three things can stop
+ * the release from ever running:
+ *
+ *   - the platform kills the invocation at its maximum duration;
+ *   - the provider call hangs past the boundary's own deadline (the boundary
+ *     aborts it and still settles, but the abort itself can be what the
+ *     platform kills);
+ *   - the process dies between admission and the settle statement.
+ *
+ * In every case the hold row is orphaned with its money still counted in the
+ * bucket. The contract every adapter has to honour:
+ *
+ *   1. **Holds expire.** A hold whose `taken_at` is older than `holdTtlMs` at
+ *      the moment of an admission decision no longer counts toward that
+ *      decision, and its reservation is given back to the bucket. The TTL is
+ *      chosen above the function's maximum duration: past that point the
+ *      invocation that took the hold cannot still be running, so nobody is
+ *      left to settle it.
+ *   2. **Reconciliation is idempotent.** `settleSpend` is keyed on the row's
+ *      `requestId`. Settling the same call twice (a retried settle, a replayed
+ *      request) writes one log row and commits its cost once. Settling a hold
+ *      that expiry already reclaimed commits the cost but does not give the
+ *      reservation back a second time.
+ *
+ * The in-memory adapter implements the same rules so the logic can be tested
+ * without a database; only the Postgres adapter proves they hold under
+ * concurrency — see "Storage engines" at the bottom of this file.
+ */
 
 export interface SpendAdmission {
   admitted: boolean
@@ -76,6 +113,9 @@ export interface SpendAdmission {
  * Postgres, Neon and Supabase all sit behind this. Feature code never sees SQL.
  */
 export interface BoundaryStore {
+  /** Which engine backs this store. See `requireRealStorageEngine`. */
+  readonly engine: StorageEngine
+
   /**
    * Bind a subject on first token mint. Returns 'already_bound' if this subject
    * has a token already — the server mints exactly one token per subject, which
@@ -101,6 +141,9 @@ export interface BoundaryStore {
    * Write the call-log row and release its hold, together. Called on success
    * and on failure alike. `holdId` is null for a row written outside an
    * admission (tests, backfills).
+   *
+   * Idempotent on `row.requestId`: a second settle for the same request is a
+   * no-op — no second row, no second charge, no second release.
    */
   settleSpend(holdId: string | null, row: ModelCallLogRow): Promise<void>
 
@@ -119,4 +162,37 @@ export interface BoundaryStore {
 /** UTC day key, `YYYY-MM-DD`. The unit the caps are expressed in. */
 export function utcDay(at: Date | number = Date.now()): string {
   return new Date(at).toISOString().slice(0, 10)
+}
+
+/**
+ * Storage engines, and what each one is allowed to prove.
+ *
+ * `memory` — the in-memory adapter. It exists to test *logic*: that the
+ * boundary takes a hold before the call, releases it with the row, refuses an
+ * unpriced model, expires a dead hold, settles idempotently. It proves nothing
+ * about any property the storage engine itself provides — atomicity,
+ * isolation, ordering, constraints. JavaScript is single-threaded, so twenty
+ * "concurrent" admissions against a Map are serialised for free, and the
+ * adapter would pass a concurrency test with a read-then-check gate that
+ * Postgres admits 5, 14 and 7 of 20 through (measured; see the migration
+ * header). A check constraint it does not enforce, a unique index it does not
+ * have, a row lock it never takes — none of that is exercised.
+ *
+ * `postgres` — the deployed path. The only engine a test may use to claim
+ * anything about concurrency, uniqueness or constraints.
+ *
+ * A test that asserts an engine property must call `requireRealStorageEngine`
+ * on its store first, so that pointing it at the in-memory adapter fails
+ * loudly instead of passing vacuously.
+ */
+export type StorageEngine = 'memory' | 'postgres'
+
+export function requireRealStorageEngine(store: Pick<BoundaryStore, 'engine'>, what = 'this test'): void {
+  if (store.engine === 'memory') {
+    throw new Error(
+      `${what} asserts a property of the storage engine (atomicity, isolation, ordering or constraints), ` +
+        'and is pointed at the in-memory adapter, which provides none of them. It would pass no matter what the ' +
+        'deployed path does. Run it against Postgres: set SPORTLY_TEST_DATABASE_URL (see server/__tests__/pg.ts).',
+    )
+  }
 }

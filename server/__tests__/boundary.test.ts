@@ -77,9 +77,13 @@ describe('spend cap', () => {
     expect(unpriced.calls).toBe(0)
   })
 
-  it('bounds concurrent spend — parallel calls cannot all pass the same check', async () => {
-    // The bug this pins: a read-then-check cap is bypassed by concurrency,
-    // because every in-flight request reads the same spend and all pass.
+  it('takes a hold per in-flight call, so the boundary asks the store the right question (logic only)', async () => {
+    // What this proves: the boundary counts holds, not just committed spend,
+    // so twenty calls that have not settled cannot all be admitted. What it
+    // does NOT prove: that admission is atomic. The in-memory store is
+    // single-threaded and would pass this with a read-then-check gate that
+    // Postgres lets 14 of 20 through. Atomicity is proven only by
+    // postgresConcurrency.test.ts, which refuses this adapter.
     const store = createMemoryStore()
     const provider = fakeVisionProvider({ model: 'claude-opus-5', tokensIn: 2_000_000, tokensOut: 0 })
     const ctx = { store, subjectId: SUBJECT_A, caps, holdUsd: { food_scan: 0.05, coaching: 0.05, program: 0.05 } }

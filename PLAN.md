@@ -42,3 +42,27 @@
     tests must stay green, and typecheck and lint must stay clean.
 15. Out of scope by the brief: no vision call wired into Food Scan, no coaching model, no
     S3N validator, no benchmark scaffolding. Not deployed, not pushed to main.
+
+# V8a.1 — Close out the foundation
+
+1. **Vercel is canonical.** `.github/workflows/deploy-pages.yml` deleted; `api/` cannot run
+   on Pages. `vercel.json` gains `functions.maxDuration: 60`. Not deployed from this
+   session: the sandbox's network policy refuses `api.vercel.com` (403 on CONNECT) and
+   holds no Vercel credentials, so the preview deploy is recorded as blocked in the PR
+   and the handlers were exercised end to end locally instead — real `api/*` handlers
+   bundled the way Vercel bundles them, real Postgres, stub text adapter.
+2. **CI runs the Postgres tests.** `.github/workflows/ci.yml` — Postgres 16 service,
+   migrations applied, `pnpm test:unit` with `SPORTLY_TEST_DATABASE_URL`. The Postgres
+   suites are no longer opt-in: without a URL they fail with a message, and skip only under
+   an explicit `SPORTLY_SKIP_POSTGRES_TESTS=1` (`server/__tests__/pg.ts`).
+3. **Hold lifecycle** (`server/store/port.ts` header, `server/budget/caps.ts`): holds expire
+   at `HOLD_TTL_MS = maxDuration + 15 s`; the boundary aborts the provider phase at
+   `PROVIDER_DEADLINE_MS = 45 s` so a hang settles rather than leaks; `settleSpend` is
+   idempotent on `request_id` (unique index, `migrations/0002_hold_lifecycle.sql`, and
+   `on conflict do nothing` gating both the release and the charge).
+4. **Found by the Postgres tests, fixed:** `latencyMs` was fractional (`performance.now()`)
+   against an `integer` column, so every real settle would have failed with
+   `PERSISTENCE_FAILURE` — no log row, hold left to the TTL. Rounded in `server/boundary.ts`.
+5. **In-memory guard rail.** `BoundaryStore.engine`; `requireRealStorageEngine` throws for the
+   memory adapter; the Postgres fixture calls it in `beforeAll`. The in-memory "concurrency"
+   test in `boundary.test.ts` is retitled as logic-only.

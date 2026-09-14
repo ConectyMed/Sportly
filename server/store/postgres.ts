@@ -94,6 +94,8 @@ export function createPostgresStore(sql: SqlExecutor, options: PostgresStoreOpti
   const mintWindowMs = options.mintWindowMs ?? 60 * 60 * 1000
 
   return {
+    engine: 'postgres',
+
     async bindSubjectOnce(subjectId: string, atIso: string): Promise<BindSubjectResult> {
       // ON CONFLICT DO NOTHING makes the one-token-per-subject rule atomic:
       // two concurrent mints cannot both see an unbound subject.
@@ -174,7 +176,16 @@ export function createPostgresStore(sql: SqlExecutor, options: PostgresStoreOpti
           ),
         )
 
-      /** Give a dead request's reservation back to its bucket. */
+      /**
+       * Give a dead request's reservation back to its bucket.
+       *
+       * Expiry is decided here, at admission time, not by a scheduler: a hold
+       * older than the TTL is one whose invocation the platform has already
+       * killed (the TTL sits above the function's maximum duration), so
+       * nobody is left to settle it. Deleting the hold row is what makes a
+       * late settle harmless — `settleSpend` releases only a hold row it
+       * finds, so a reclaimed reservation cannot be given back a second time.
+       */
       const reclaimStale = () =>
         guard('admitSpend.reclaim', () =>
           sql(
@@ -209,6 +220,14 @@ export function createPostgresStore(sql: SqlExecutor, options: PostgresStoreOpti
       // bucket, and the real cost is committed. The bucket update is relative
       // (+/-) and row-locked, so concurrent settles compose correctly.
       //
+      // Idempotent on request_id. The unique index from migration 0002 turns
+      // a replayed settle into `on conflict do nothing`, and both the hold
+      // release and the bucket update are gated on that insert having landed
+      // — so the second settle of one call writes no row, releases no hold
+      // and commits no cost. Two concurrent settles of the same request
+      // cannot both pass either: the second blocks on the index and sees the
+      // conflict once the first commits.
+      //
       // A null cost (an unknown model) commits nothing — which is safe only
       // because admission refuses unpriced models up front; see
       // server/budget/check.ts.
@@ -220,10 +239,12 @@ export function createPostgresStore(sql: SqlExecutor, options: PostgresStoreOpti
                 tokens_in, tokens_cached, tokens_out, cost_usd, cost_unknown_model,
                 latency_ms, retry_count, outcome, error_category)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             on conflict (request_id) do nothing
              returning 1
            ), rel as (
              delete from sportly_spend_hold
              where $17::uuid is not null and hold_id = $17::uuid
+               and exists (select 1 from ins)
              returning hold_usd
            )
            update sportly_spend_bucket b

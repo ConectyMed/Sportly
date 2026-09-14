@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { admitCall, type BudgetVerdict } from './budget/check'
-import { DEFAULT_HOLD_USD, HOLD_TTL_MS, type DailyCaps } from './budget/caps'
+import { DEFAULT_HOLD_USD, HOLD_TTL_MS, PROVIDER_DEADLINE_MS, type DailyCaps } from './budget/caps'
 import { asBoundaryError, BoundaryError, isBoundaryError } from './errors'
 import { writeCallLog } from './log/callLog'
-import type { ProviderResult, ProviderUsage } from './provider'
+import type { ProviderCallOptions, ProviderResult, ProviderUsage } from './provider'
 import type { BoundaryStore, ModelCallLogRow, Route, TaskType } from './store/port'
 
 /**
@@ -28,8 +28,12 @@ export interface ModelCallDescriptor<T> {
   taskType: TaskType
   provider: string
   model: string
-  /** The actual provider call. Called once per attempt. */
-  invoke: () => Promise<ProviderResult<T>>
+  /**
+   * The actual provider call. Called once per attempt, with an abort signal
+   * that fires at the boundary's deadline; an adapter that ignores the signal
+   * is still timed out, it just cannot stop its own request.
+   */
+  invoke: (options: ProviderCallOptions) => Promise<ProviderResult<T>>
 }
 
 export interface RunModelCallContext {
@@ -45,6 +49,8 @@ export interface RunModelCallContext {
   /** Per-route worst-case cost held during a call. Defaults to DEFAULT_HOLD_USD. */
   holdUsd?: Partial<DailyCaps>
   holdTtlMs?: number
+  /** Whole provider phase, all attempts. Defaults to PROVIDER_DEADLINE_MS. */
+  providerDeadlineMs?: number
 }
 
 export interface ModelCallSuccess<T> {
@@ -82,15 +88,27 @@ export async function runModelCall<T>(ctx: RunModelCallContext, call: ModelCallD
     now: now(),
   })
 
-  // 2. Provider, with a bounded retry on transient failures only.
+  // 2. Provider, with a bounded retry on transient failures only, under one
+  //    deadline for the whole phase. The deadline is what turns "the provider
+  //    hung" into a settled row with PROVIDER_TIMEOUT rather than a hold left
+  //    for the TTL — it sits inside the function's maximum duration so the
+  //    settle below still has time to run. See server/budget/caps.ts.
   const startedAt = monotonic()
+  const deadline = startedAt + (ctx.providerDeadlineMs ?? PROVIDER_DEADLINE_MS)
   let retryCount = 0
   let result: ProviderResult<T> | undefined
   let failure: BoundaryError | undefined
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    // The first attempt has the whole deadline by definition; only a retry
+    // needs to ask the clock how much of it is left.
+    const remainingMs = attempt === 0 ? deadline - startedAt : deadline - monotonic()
+    if (remainingMs <= 0) {
+      failure = new BoundaryError('PROVIDER_TIMEOUT', 'The provider did not answer within the boundary deadline.')
+      break
+    }
     try {
-      result = await call.invoke()
+      result = await withDeadline(call.invoke, remainingMs)
       failure = undefined
       break
     } catch (err) {
@@ -103,7 +121,10 @@ export async function runModelCall<T>(ctx: RunModelCallContext, call: ModelCallD
     }
   }
 
-  const latencyMs = Math.max(0, monotonic() - startedAt)
+  // Whole milliseconds: performance.now() is fractional, and latency_ms is an
+  // integer column. An unrounded value made every real settle fail with
+  // PERSISTENCE_FAILURE — no row, and a hold left standing until its TTL.
+  const latencyMs = Math.max(0, Math.round(monotonic() - startedAt))
 
   // 3. Log, whichever way it went, and release the hold with the row. A failed
   //    call still costs tokens sometimes, and always costs latency and a retry
@@ -134,6 +155,33 @@ export async function runModelCall<T>(ctx: RunModelCallContext, call: ModelCallD
   if (failure) throw failure
   if (!result) throw new BoundaryError('PROVIDER_UNAVAILABLE', 'The provider returned no result.')
   return { ok: true, requestId, output: result.output, budget, log }
+}
+
+/**
+ * Run one attempt under a deadline. The signal lets a cooperative adapter
+ * cancel its HTTP request; the race is what bounds an adapter that does not.
+ */
+async function withDeadline<T>(invoke: (options: ProviderCallOptions) => Promise<T>, ms: number): Promise<T> {
+  const controller = new AbortController()
+  const timedOut = () => new BoundaryError('PROVIDER_TIMEOUT', 'The provider did not answer within the boundary deadline.')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort()
+      reject(timedOut())
+    }, ms)
+  })
+  // An adapter that honours the signal rejects with its own abort error, and
+  // usually before the timer's rejection lands. Once the signal has fired,
+  // whatever the adapter threw *is* the timeout.
+  const attempt = invoke({ signal: controller.signal }).catch((err: unknown) => {
+    throw controller.signal.aborted ? timedOut() : err
+  })
+  try {
+    return await Promise.race([attempt, expired])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export { isBoundaryError }

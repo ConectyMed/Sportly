@@ -16,8 +16,16 @@ interface Hold {
 }
 
 /**
- * In-memory adapter. This is what the V8a tests run against — no database in
- * CI — and it is also the reference for what the Postgres adapter must do.
+ * In-memory adapter.
+ *
+ * It is the reference for what the Postgres adapter must do at the level of
+ * *logic* — take a hold, release it with the row, expire a dead hold, settle
+ * once per request — and it is what the fast tests run against. It proves
+ * nothing about atomicity, isolation, ordering or constraints: single-threaded
+ * JavaScript serialises every "concurrent" call for free, so a concurrency
+ * test pointed here passes whatever the deployed path does. Those tests run
+ * against Postgres in CI and refuse this adapter; see `requireRealStorageEngine`
+ * in ./port.ts.
  *
  * Single-process only, so it is never the silent production default; see
  * `resolveStore` in server/app.ts.
@@ -34,6 +42,7 @@ export function createMemoryStore(options: MemoryStoreOptions = {}): BoundarySto
     rows.filter((r) => r.subjectId === subjectId && r.route === route && r.ts.slice(0, 10) === day).reduce((sum, r) => sum + (r.costUsd ?? 0), 0)
 
   return {
+    engine: 'memory',
     rows,
 
     async bindSubjectOnce(subjectId: string, atIso: string): Promise<BindSubjectResult> {
@@ -69,6 +78,10 @@ export function createMemoryStore(options: MemoryStoreOptions = {}): BoundarySto
     },
 
     async settleSpend(holdId: string | null, row: ModelCallLogRow): Promise<void> {
+      // Idempotent on requestId: a replayed settle writes nothing and releases
+      // nothing. A hold that expiry already reclaimed is simply gone by now,
+      // so it cannot be given back twice either.
+      if (rows.some((r) => r.requestId === row.requestId)) return
       rows.push({ ...row })
       if (holdId) holds.delete(holdId)
     },

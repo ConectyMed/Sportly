@@ -1,39 +1,21 @@
-import { Pool } from 'pg'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { createPostgresStore, type SqlExecutor } from '../store/postgres'
+import { expect, it } from 'vitest'
+import { describePostgres } from './pg'
 
 /**
  * The admission path against a real Postgres.
  *
- * Opt-in: set SPORTLY_TEST_DATABASE_URL to a database with
- * migrations/0001_model_call_log.sql applied. CI runs without one, per the
- * no-database-in-CI rule, so this suite skips there — but the in-memory store
- * is single-threaded JavaScript and therefore atomic for free, which means the
- * in-memory concurrency test proves nothing whatsoever about the deployed
- * path. This is the only test that does.
- *
- *   createdb sportly_test
- *   psql -d sportly_test -f migrations/0001_model_call_log.sql
- *   SPORTLY_TEST_DATABASE_URL=postgres://…/sportly_test pnpm test:unit
+ * The in-memory store is single-threaded JavaScript and therefore atomic for
+ * free, which means an in-memory concurrency test proves nothing whatsoever
+ * about the deployed path. This suite is the only proof that the cap holds
+ * under load, so it runs on every push in CI and fails — never skips — when
+ * no database is configured. See ./pg.ts for the local setup.
  */
-const url = process.env.SPORTLY_TEST_DATABASE_URL
-const withPg = url ? describe : describe.skip
-
 const SUBJECT = '11111111-1111-4111-8111-111111111111'
 const OTHER = '22222222-2222-4222-8222-222222222222'
 const DAY = '2026-01-01'
 const AT = Date.parse('2026-01-01T12:00:00Z')
 
-withPg('postgres admission under concurrency', () => {
-  const pool = new Pool({ connectionString: url, max: 25 })
-  const sql = (async (text: string, params: unknown[]) => pool.query(text, params)) as SqlExecutor
-  const store = createPostgresStore(sql)
-  afterAll(() => pool.end())
-
-  beforeEach(async () => {
-    await pool.query('truncate sportly_spend_hold, sportly_model_call_log, sportly_spend_bucket, sportly_mint_bucket, sportly_subject')
-  })
-
+describePostgres('postgres admission under concurrency', ({ pool, store }) => {
   const admit = (subjectId = SUBJECT, holdUsd = 0.05, capUsd = 0.25) =>
     store.admitSpend({ subjectId, route: 'food_scan', day: DAY, capUsd, holdUsd, nowMs: AT, holdTtlMs: 120_000 })
 

@@ -125,7 +125,7 @@ export function createBoundaryApp(options: CreateAppOptions = {}): BoundaryApp {
           taskType: 'vision',
           provider: providers.vision.id,
           model: providers.vision.model,
-          invoke: () => providers.vision.analyzeImage({ imageBase64: image, mediaType, instruction }),
+          invoke: (options) => providers.vision.analyzeImage({ imageBase64: image, mediaType, instruction }, options),
         })
         return jsonResponse(200, { requestId: result.requestId, output: result.output })
       }
@@ -139,7 +139,7 @@ export function createBoundaryApp(options: CreateAppOptions = {}): BoundaryApp {
         taskType: 'text',
         provider: providers.text.id,
         model: providers.text.model,
-        invoke: () => providers.text.generateText({ system, prompt }),
+        invoke: (options) => providers.text.generateText({ system, prompt }, options),
       })
       return jsonResponse(200, { requestId: result.requestId, output: result.output })
     } catch (err) {
