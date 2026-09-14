@@ -27,3 +27,8 @@ dist-ssr
 playwright-report
 test-results
 .tmp
+
+# Environment files (Neon / Vercel CLIs write credentials here)
+.env
+.env.*
+!.env.example
