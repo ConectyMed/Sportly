@@ -1,3 +1,5 @@
+import { foldText } from '@/lib/text'
+import { exerciseName } from './labels'
 import type { ExerciseDefinition, EquipmentId, MuscleGroup } from './types'
 
 const ex = (
@@ -120,44 +122,27 @@ export function getExercise(id: string): ExerciseDefinition {
   return EXERCISE_MAP[id] ?? { ...EXERCISES[0], id, name: id }
 }
 
+/** Every name an exercise answers to: the English name, its id, and the French name (accent-folded, lower case). */
+export function exerciseAliases(e: ExerciseDefinition): string[] {
+  const names = [e.name, e.id.replace(/_/g, ' '), exerciseName(e.id, e.name, 'fr')]
+  return [...new Set(names.map((n) => foldText(n.toLowerCase())))]
+}
+
+/** Find an exercise from a name written in English or French ("squats", "développé couché", "pompes"). */
 export function findExerciseByName(query: string): ExerciseDefinition | undefined {
-  const q = query.toLowerCase().trim()
+  const q = foldText(query.toLowerCase().trim()).replace(/s\b/g, '')
   if (!q) return undefined
+  const aliasesOf = (e: ExerciseDefinition) => exerciseAliases(e).map((a) => a.replace(/s\b/g, ''))
   return (
-    EXERCISES.find((e) => e.name.toLowerCase() === q) ??
-    EXERCISES.find((e) => e.name.toLowerCase().includes(q)) ??
-    EXERCISES.find((e) => q.includes(e.name.toLowerCase().split(' ')[0]) && e.name.toLowerCase().split(' ').length === 1) ??
-    EXERCISES.find((e) => e.id.replace(/_/g, ' ').includes(q))
+    EXERCISES.find((e) => aliasesOf(e).some((a) => a === q)) ??
+    EXERCISES.find((e) => aliasesOf(e).some((a) => a.includes(q))) ??
+    EXERCISES.find((e) => aliasesOf(e).some((a) => a.split(' ').length === 1 && q.includes(a))) ??
+    EXERCISES.find((e) => aliasesOf(e).some((a) => q.includes(a)))
   )
 }
 
-export const EQUIPMENT_LABELS: Record<EquipmentId, string> = {
-  barbell: 'Barbell',
-  dumbbell: 'Dumbbells',
-  kettlebell: 'Kettlebell',
-  cable: 'Cables',
-  machine: 'Machines',
-  bodyweight: 'Bodyweight',
-  band: 'Bands',
-  pullup_bar: 'Pull-up bar',
-  bench: 'Bench',
-  cardio_machine: 'Cardio machine',
-}
-
-export const MUSCLE_LABELS: Record<MuscleGroup, string> = {
-  chest: 'Chest',
-  back: 'Back',
-  shoulders: 'Shoulders',
-  biceps: 'Biceps',
-  triceps: 'Triceps',
-  quads: 'Quads',
-  hamstrings: 'Hamstrings',
-  glutes: 'Glutes',
-  calves: 'Calves',
-  core: 'Core',
-  full_body: 'Full body',
-  cardio: 'Conditioning',
-}
+export const EQUIPMENT_IDS: EquipmentId[] = ['barbell', 'dumbbell', 'kettlebell', 'cable', 'machine', 'bodyweight', 'band', 'pullup_bar', 'bench', 'cardio_machine']
+export const MUSCLE_GROUPS: MuscleGroup[] = ['chest', 'back', 'shoulders', 'biceps', 'triceps', 'quads', 'hamstrings', 'glutes', 'calves', 'core', 'full_body', 'cardio']
 
 /** Estimated one-rep max (Epley). */
 export function e1rm(weightKg: number, reps: number): number {

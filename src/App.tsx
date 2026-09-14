@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AppShell } from '@/components/layout/AppShell'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Skeleton } from '@/components/ui/Primitives'
-import { useReducedMotionPref, useThemeSync } from '@/lib/theme'
+import { useLanguageSync, useReducedMotionPref, useThemeSync } from '@/lib/theme'
 import { useStore } from '@/store/useStore'
 import { HomeScreen } from '@/screens/Home/HomeScreen'
 import { CoachScreen } from '@/screens/Coach/CoachScreen'
@@ -41,6 +41,7 @@ function RequireOnboarding({ children }: { children: ReactNode }) {
 function ThemeBridge() {
   useThemeSync()
   useReducedMotionPref()
+  useLanguageSync()
   return null
 }
 

@@ -1,6 +1,7 @@
 import { ChevronLeft } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
+import { useT } from '@/i18n/react'
 import { cn } from '@/lib/utils'
 
 export interface PageProps {
@@ -17,13 +18,14 @@ export interface PageProps {
 
 export function Page({ title, eyebrow, back, right, children, className, large, noPad }: PageProps) {
   const navigate = useNavigate()
+  const tr = useT()
   return (
     <div className={cn('flex flex-col min-h-full', className)}>
       {(back || right || (title && !large)) && (
         <header className={cn('pt-safe sticky top-0 z-30 blur-bar', large ? 'bg-transparent' : 'border-b border-hairline')} style={{ background: large ? undefined : 'var(--tabbar-bg)' }}>
           <div className={cn('flex items-center gap-2 px-4', large ? 'h-14' : 'h-14')}>
             {back && (
-              <button aria-label="Back" onClick={() => (typeof back === 'string' ? navigate(back) : navigate(-1))} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
+              <button aria-label={tr.t('common.back')} onClick={() => (typeof back === 'string' ? navigate(back) : navigate(-1))} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
                 <ChevronLeft size={22} />
               </button>
             )}

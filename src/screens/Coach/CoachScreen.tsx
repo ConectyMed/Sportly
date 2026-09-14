@@ -10,6 +10,7 @@ import { Chip } from '@/components/ui/Chip'
 import { CoachMark } from '@/components/ui/Primitives'
 import { Sheet } from '@/components/ui/Sheet'
 import type { Attachment, Message } from '@/domain/types'
+import { useT } from '@/i18n/react'
 import { useIsDesktop } from '@/lib/hooks'
 import { relativeDay, relativeTime } from '@/lib/dates'
 import { cn } from '@/lib/utils'
@@ -17,6 +18,7 @@ import { useStore } from '@/store/useStore'
 
 export function CoachScreen() {
   const navigate = useNavigate()
+  const tr = useT()
   const desktop = useIsDesktop()
   const reduce = useReducedMotion()
   const coach = useStore((s) => s.coach)
@@ -69,14 +71,14 @@ export function CoachScreen() {
 
   const contextualPrompts = useMemo(() => {
     const list: string[] = []
-    if (todayWorkout?.status === 'planned') list.push('Start my workout', 'Make it shorter', 'I only have dumbbells')
-    else if (todayWorkout?.status === 'completed') list.push('How did I do this week?', 'What should I eat now?')
-    else list.push('Build today’s workout', 'I only have 30 minutes')
-    list.push('What should I eat?')
-    if (!activeProgram) list.push('Create a 12-week program')
-    list.push('Analyze my progress', 'Plan my week')
+    if (todayWorkout?.status === 'planned') list.push(tr.t('coachScreen.prompt.startWorkout'), tr.t('coachScreen.prompt.shorter'), tr.t('coachScreen.prompt.dumbbellsOnly'))
+    else if (todayWorkout?.status === 'completed') list.push(tr.t('coachScreen.prompt.weekReview'), tr.t('coachScreen.prompt.eatNow'))
+    else list.push(tr.t('coachScreen.prompt.buildToday'), tr.t('coachScreen.prompt.only30'))
+    list.push(tr.t('coachScreen.prompt.eat'))
+    if (!activeProgram) list.push(tr.t('coachScreen.prompt.create12'))
+    list.push(tr.t('coachScreen.prompt.analyze'), tr.t('coachScreen.prompt.planWeek'))
     return [...new Set(list)].slice(0, 6)
-  }, [todayWorkout, activeProgram])
+  }, [todayWorkout, activeProgram, tr])
 
   const lastCoachIdx = [...messages].map((m, i) => (m.role === 'coach' ? i : -1)).filter((i) => i >= 0).pop()
   const firstName = user?.name.split(' ')[0] ?? ''
@@ -88,15 +90,15 @@ export function CoachScreen() {
           <CoachMark size={26} active={typing} />
           <div className="flex-1 min-w-0">
             <div className="title text-[16px] leading-none">{coach.name}</div>
-            <div className="text-[11.5px] text-text-3 mt-1 truncate">{typing ? (status ?? 'Thinking…') : memoryCount > 0 ? `Always here · keeps ${memoryCount} things in mind` : 'Your coach · always here'}</div>
+            <div className="text-[11.5px] text-text-3 mt-1 truncate">{typing ? (status ?? tr.t('coachScreen.thinking')) : memoryCount > 0 ? tr.t('coachScreen.keepsInMind', { things: tr.tn('common.things', memoryCount) }) : tr.t('coachScreen.alwaysHere')}</div>
           </div>
-          <button aria-label="Coach memory" onClick={() => navigate('/profile/memory')} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
+          <button aria-label={tr.t('coachScreen.memory')} onClick={() => navigate('/profile/memory')} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
             <Brain size={19} />
           </button>
-          <button aria-label="Conversations" onClick={() => setHistoryOpen(true)} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
+          <button aria-label={tr.t('coachScreen.conversations')} onClick={() => setHistoryOpen(true)} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
             <History size={19} />
           </button>
-          <button aria-label="New conversation" onClick={() => createConversation()} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
+          <button aria-label={tr.t('coachScreen.newConversation')} onClick={() => createConversation()} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface">
             <Plus size={20} />
           </button>
         </div>
@@ -107,10 +109,8 @@ export function CoachScreen() {
           <div className="min-h-full flex flex-col justify-end pb-6">
             <div className="flex-1 flex flex-col items-center justify-center text-center pt-10">
               <CoachMark size={48} active />
-              <h2 className="title text-[22px] mt-5">
-                {firstName ? `Hey ${firstName}.` : 'Hey.'} What do you need?
-              </h2>
-              <p className="text-[14px] text-text-3 mt-2 max-w-[280px] text-pretty">Training, food, your plan, how you feel. Talk to me like you would to a coach who already knows you.</p>
+              <h2 className="title text-[22px] mt-5">{firstName ? tr.t('coachScreen.heyName', { name: firstName }) : tr.t('coachScreen.hey')}</h2>
+              <p className="text-[14px] text-text-3 mt-2 max-w-[280px] text-pretty">{tr.t('coachScreen.intro')}</p>
             </div>
             <div className="flex flex-wrap gap-2 justify-center pt-8">
               {contextualPrompts.map((p) => (
@@ -144,10 +144,10 @@ export function CoachScreen() {
       </div>
 
       <div className="max-w-[760px] w-full mx-auto">
-        <Composer placeholder={`Message ${coach.name}`} disabled={typing} onSend={send} initialText={prefill} />
+        <Composer placeholder={tr.t('coachScreen.messageCoach', { name: coach.name })} disabled={typing} onSend={send} initialText={prefill} />
       </div>
 
-      <Sheet open={historyOpen} onClose={() => setHistoryOpen(false)} title="Conversations" size="tall">
+      <Sheet open={historyOpen} onClose={() => setHistoryOpen(false)} title={tr.t('coachScreen.conversations')} size="tall">
         <div className="pb-2">
           <Button
             variant="secondary"
@@ -158,7 +158,7 @@ export function CoachScreen() {
               setHistoryOpen(false)
             }}
           >
-            New conversation
+            {tr.t('coachScreen.newConversation')}
           </Button>
         </div>
         <ul className="divide-y divide-[var(--hairline)]">
@@ -175,11 +175,11 @@ export function CoachScreen() {
                 >
                   <div className="text-[15px] font-medium truncate">{c.title}</div>
                   <div className="text-[12px] text-text-3 mt-0.5">
-                    {relativeDay(c.updatedAt)} · {count} {count === 1 ? 'message' : 'messages'}
+                    {relativeDay(c.updatedAt)} · {tr.tn('common.messages', count)}
                   </div>
                 </button>
                 {conversations.length > 1 && (
-                  <button aria-label="Delete conversation" onClick={() => deleteConversation(c.id)} className="h-9 w-9 rounded-full flex items-center justify-center text-text-4 hover:text-danger">
+                  <button aria-label={tr.t('coachScreen.deleteConversation')} onClick={() => deleteConversation(c.id)} className="h-9 w-9 rounded-full flex items-center justify-center text-text-4 hover:text-danger">
                     <Trash2 size={16} />
                   </button>
                 )}

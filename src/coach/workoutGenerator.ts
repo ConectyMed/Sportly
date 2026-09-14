@@ -1,5 +1,7 @@
-import { EXERCISES, EXERCISE_MAP, getExercise } from '@/domain/exercises'
-import { FOCUS_LABELS } from '@/domain/labels'
+import { EXERCISES, EXERCISE_MAP, exerciseAliases, getExercise } from '@/domain/exercises'
+import { equipmentLabel, focusLabel, parseTitleKey, renderWorkoutTitle, titleKeyOf, titlePartsFromLegacy, type WorkoutTitleParts } from '@/domain/labels'
+import { t } from '@/i18n'
+import { foldText } from '@/lib/text'
 import type {
   EquipmentId,
   ExerciseDefinition,
@@ -16,6 +18,7 @@ import type {
   WorkoutSet,
 } from '@/domain/types'
 import { clamp, hashString, round, shuffle, uid } from '@/lib/utils'
+import { exerciseName } from '@/domain/labels'
 import { todayKey } from '@/lib/dates'
 import type { Readiness } from './readiness'
 
@@ -272,12 +275,20 @@ function estimateMinutes(exercises: WorkoutExercise[]): number {
   return Math.max(10, Math.round(sec / 60 / 5) * 5)
 }
 
-function titleFor(focus: WorkoutFocus, constraints?: WorkoutConstraints, seed = 0): string {
-  const base = FOCUS_LABELS[focus]
-  if (constraints?.intensity === 'light') return `${base} · Light`
-  if (constraints?.minutes && constraints.minutes <= 30) return `${base} Express`
-  if (focus === 'full_body') return ['Full Body A', 'Full Body B'][seed % 2]
-  return base
+function titlePartsFor(focus: WorkoutFocus, constraints?: WorkoutConstraints, seed = 0): WorkoutTitleParts {
+  if (constraints?.intensity === 'light') return { focus, light: true }
+  if (constraints?.minutes && constraints.minutes <= 30) return { focus, express: true }
+  if (focus === 'full_body') return { focus, variant: seed % 2 === 0 ? 'A' : 'B' }
+  return { focus }
+}
+
+/** The stored title is the English canonical rendering of the structured key; screens localise from the key. */
+export function titledWorkout<T extends Pick<Workout, 'title' | 'titleKey'>>(w: T, parts: WorkoutTitleParts): T {
+  return { ...w, titleKey: titleKeyOf(parts), title: renderWorkoutTitle(parts, 'en') }
+}
+
+function partsOf(w: Pick<Workout, 'title' | 'titleKey' | 'focus'>): WorkoutTitleParts {
+  return parseTitleKey(w.titleKey) ?? titlePartsFromLegacy(w.title) ?? { focus: w.focus }
 }
 
 export function generateWorkout(input: GenerateWorkoutInput): Workout {
@@ -357,6 +368,7 @@ export function generateWorkout(input: GenerateWorkoutInput): Workout {
       name: ex.name,
       sets: makeSets(scheme, load),
       restSeconds: isSuperset ? Math.round(scheme.rest * 0.6) : scheme.rest,
+      // Stored cue is the English canonical; screens render exerciseCue(exerciseId) in the user's language.
       note: ex.cue,
       group: isSuperset ? 'A' : undefined,
     }
@@ -375,16 +387,14 @@ export function generateWorkout(input: GenerateWorkoutInput): Workout {
     est = next
   }
 
-  const readinessNote =
-    constraints.intensity === 'light'
-      ? 'Kept this one lighter so you recover well.'
-      : constraints.intensity === 'hard'
-        ? 'You are recovering well, so there is a little extra in the compounds.'
-        : undefined
+  const noteKey = constraints.intensity === 'light' ? 'light' : constraints.intensity === 'hard' ? 'hard' : undefined
+  const readinessNote = noteKey ? t(`workoutNote.${noteKey}`, undefined, 'en') : undefined
 
+  const parts = titlePartsFor(focus, constraints, seed)
   return {
     id: uid('wk'),
-    title: titleFor(focus, constraints, seed),
+    title: renderWorkoutTitle(parts, 'en'),
+    titleKey: titleKeyOf(parts),
     focus,
     estimatedMinutes: est,
     exercises,
@@ -396,6 +406,7 @@ export function generateWorkout(input: GenerateWorkoutInput): Workout {
     programDay: input.program?.day,
     constraints: Object.keys(constraints).length ? constraints : undefined,
     coachNote: readinessNote,
+    noteKey,
     createdAt: new Date().toISOString(),
   }
 }
@@ -421,24 +432,29 @@ export function shortenWorkout(workout: Workout, targetMinutes: number): Workout
     }))
     est = estimateMinutes(exercises)
   }
-  return {
-    ...workout,
-    exercises,
-    estimatedMinutes: est,
-    title: workout.title.includes('Express') ? workout.title : `${workout.title.replace(/ · Light/, '')} Express`,
-    constraints: { ...(workout.constraints ?? {}), minutes: targetMinutes },
-    history: [...(workout.history ?? []), `Shortened to ${targetMinutes} min`],
-  }
+  const parts = partsOf(workout)
+  return titledWorkout(
+    {
+      ...workout,
+      exercises,
+      estimatedMinutes: est,
+      constraints: { ...(workout.constraints ?? {}), minutes: targetMinutes },
+      history: [...(workout.history ?? []), t('workoutHistory.shortened', { minutes: targetMinutes })],
+    },
+    { ...parts, express: true, light: false },
+  )
 }
 
-/** True when the exercise matches one of the user's persistent "never give me this" preferences. */
+/** True when the exercise matches one of the user's persistent "never give me this" preferences, in either language. */
 export function isDislikedExercise(ex: Pick<ExerciseDefinition, 'id' | 'name'>, user: Pick<UserProfile, 'dislikedExercises'>): boolean {
   const list = user.dislikedExercises ?? []
   if (!list.length) return false
-  const name = ex.name.toLowerCase()
+  const full = EXERCISE_MAP[ex.id]
+  const aliases = full ? exerciseAliases(full) : [foldText(ex.name.toLowerCase()), ex.id.replace(/_/g, ' ')]
   return list.some((d) => {
-    const k = d.toLowerCase().trim()
-    return k === ex.id || name.includes(k) || ex.id.includes(k.replace(/\s+/g, '_'))
+    const k = foldText(d.toLowerCase().trim()).replace(/s$/, '')
+    if (!k) return false
+    return k === ex.id || ex.id.includes(k.replace(/\s+/g, '_')) || aliases.some((a) => a.includes(k))
   })
 }
 
@@ -481,7 +497,7 @@ export function replaceExercise(workout: Workout, exerciseId: string, user: User
       ...workout,
       exercises,
       constraints: { ...(workout.constraints ?? {}), excludeExerciseIds: [...(workout.constraints?.excludeExerciseIds ?? []), exerciseId] },
-      history: [...(workout.history ?? []), `Replaced ${original.name} with ${sub.name}`],
+      history: [...(workout.history ?? []), t('workoutHistory.replaced', { from: exerciseName(original.id, original.name), to: exerciseName(sub.id, sub.name) })],
     },
     replacedWith: sub,
     original,
@@ -500,7 +516,7 @@ export function restrictEquipment(workout: Workout, equipment: EquipmentId[], us
   return {
     ...out,
     constraints: { ...(out.constraints ?? {}), equipment },
-    history: [...(workout.history ?? []), `Limited to ${equipment.join(', ')}`],
+    history: [...(workout.history ?? []), t('workoutHistory.limited', { equipment: equipment.map((e) => equipmentLabel(e).toLowerCase()).join(', ') })],
   }
 }
 
@@ -514,7 +530,7 @@ export function removeCardio(workout: Workout): Workout {
     exercises,
     estimatedMinutes: estimateMinutes(exercises),
     constraints: { ...(workout.constraints ?? {}), noCardio: true },
-    history: [...(workout.history ?? []), 'Removed cardio'],
+    history: [...(workout.history ?? []), t('workoutHistory.removedCardio')],
   }
 }
 
@@ -527,15 +543,20 @@ export function scaleIntensity(workout: Workout, mode: 'lighter' | 'harder'): Wo
     if (mode === 'harder' && def.compound && sets.length < 5) sets = [...sets, { ...sets[sets.length - 1], id: uid('set'), completed: false }]
     return { ...e, sets }
   })
-  return {
-    ...workout,
-    exercises,
-    estimatedMinutes: estimateMinutes(exercises),
-    title: mode === 'lighter' ? `${workout.title.replace(/ · Light/, '')} · Light` : workout.title.replace(/ · Light/, ''),
-    constraints: { ...(workout.constraints ?? {}), intensity: mode === 'lighter' ? 'light' : 'hard' },
-    history: [...(workout.history ?? []), mode === 'lighter' ? 'Made lighter' : 'Made harder'],
-  }
+  return titledWorkout(
+    {
+      ...workout,
+      exercises,
+      estimatedMinutes: estimateMinutes(exercises),
+      constraints: { ...(workout.constraints ?? {}), intensity: mode === 'lighter' ? 'light' : 'hard' },
+      history: [...(workout.history ?? []), t(mode === 'lighter' ? 'workoutHistory.lighter' : 'workoutHistory.harder')],
+    },
+    { ...partsOf(workout), light: mode === 'lighter' },
+  )
 }
+
+/** The localised label a modification note should use for a focus (helper for callers). */
+export { focusLabel }
 
 export function workoutVolume(workout: Workout): number {
   let vol = 0

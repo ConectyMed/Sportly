@@ -23,6 +23,7 @@ import type {
 } from '@/domain/types'
 import { uid } from '@/lib/utils'
 import { todayKey } from '@/lib/dates'
+import { detectBrowserLanguage, isLanguage, setActiveLanguage, type Language } from '@/i18n/runtime-bridge'
 
 export const STORAGE_KEY = 'sportly.v1'
 
@@ -42,6 +43,9 @@ export const DEFAULT_COACH: CoachConfig = {
 
 export const DEFAULT_PREFERENCES: Preferences = {
   theme: 'dark',
+  // First-time users start in their browser's language (French → French, otherwise English).
+  // Once persisted, the explicit choice wins and the browser is never consulted again.
+  language: detectBrowserLanguage(),
   units: 'metric',
   reducedMotion: 'system',
   hapticFeedback: true,
@@ -189,6 +193,8 @@ export interface AppState {
   updatePreferences: (patch: Partial<Preferences>) => void
   updateNotificationPreferences: (patch: Partial<Preferences['notifications']>) => void
   setTheme: (theme: Preferences['theme']) => void
+  /** Language is structured user state: one setting, applied immediately everywhere, never a memory. */
+  setLanguage: (language: Language) => void
   toast: (text: string, kind?: 'success' | 'info' | 'error') => void
   dismissToast: () => void
 }
@@ -249,10 +255,11 @@ export const useStore = create<AppState>()(
           checkIns: payload.checkIns,
           events: payload.events,
           notifications: payload.notifications,
-          preferences: { ...DEFAULT_PREFERENCES, ...(payload.preferences ?? {}) },
+          // A seed replaces the profile, never the user's language (or theme) choice.
+          preferences: { ...DEFAULT_PREFERENCES, language: get().preferences.language, ...(payload.preferences ?? {}) },
         }),
 
-      resetAll: () => set({ ...initialData(), preferences: { ...DEFAULT_PREFERENCES, theme: get().preferences.theme } }),
+      resetAll: () => set({ ...initialData(), preferences: { ...DEFAULT_PREFERENCES, theme: get().preferences.theme, language: get().preferences.language } }),
 
       updateUser: (patch) => set((s) => ({ user: s.user ? { ...s.user, ...patch } : s.user })),
       upsertGoal: (goal) =>
@@ -498,6 +505,7 @@ export const useStore = create<AppState>()(
       updateNotificationPreferences: (patch) =>
         set((s) => ({ preferences: { ...s.preferences, notifications: { ...s.preferences.notifications, ...patch } } })),
       setTheme: (theme) => set((s) => ({ preferences: { ...s.preferences, theme } })),
+      setLanguage: (language) => set((s) => (isLanguage(language) && language !== s.preferences.language ? { preferences: { ...s.preferences, language } } : {})),
       toast: (text, kind = 'info') => {
         const id = uid('toast')
         set((s) => ({ ui: { ...s.ui, toast: { id, text, kind } } }))
@@ -509,19 +517,23 @@ export const useStore = create<AppState>()(
     }),
     {
       name: STORAGE_KEY,
-      version: 4,
+      version: 5,
       migrate: (persisted) => {
         // v1 → v2 added the food journal; v2 → v3 the action audit log; v3 → v4 the
-        // provider configuration (unknown providers fall back to the built-in coach).
+        // provider configuration (unknown providers fall back to the built-in coach);
+        // v4 → v5 the language preference. An existing snapshot without a language is a
+        // V6 user who has always seen English: they keep English, whatever the browser says.
         // All additive: older snapshots keep every entity they had.
         const p = (persisted ?? {}) as Partial<AppState>
         const provider = p.coach?.provider
         const known = provider === 'local' || provider === 'anthropic' || provider === 'openai' || provider === 'local_llm'
+        const language: Language = isLanguage(p.preferences?.language) ? p.preferences.language : 'en'
         return {
           ...p,
           meals: p.meals ?? {},
           actionLog: Array.isArray(p.actionLog) ? p.actionLog : [],
           coach: p.coach ? { ...p.coach, provider: known ? provider : 'local' } : p.coach,
+          preferences: { ...(p.preferences ?? DEFAULT_PREFERENCES), language } as Preferences,
         } as AppState
       },
       storage: createJSONStorage(() => localStorage),
@@ -542,6 +554,8 @@ export const useStore = create<AppState>()(
           preferences: {
             ...DEFAULT_PREFERENCES,
             ...(p.preferences ?? {}),
+            // A persisted profile without a language value predates V7: keep it in English.
+            language: isLanguage(p.preferences?.language) ? p.preferences.language : p.preferences || p.user ? 'en' : DEFAULT_PREFERENCES.language,
             notifications: { ...DEFAULT_PREFERENCES.notifications, ...(p.preferences?.notifications ?? {}) },
             privacy: { ...DEFAULT_PREFERENCES.privacy, ...(p.preferences?.privacy ?? {}) },
           },
@@ -551,5 +565,12 @@ export const useStore = create<AppState>()(
     },
   ),
 )
+
+// The store owns the language; the i18n runtime mirrors it so that non-React code
+// (dates, tool summaries, generators) speaks the same language without importing the store.
+setActiveLanguage(useStore.getState().preferences.language)
+useStore.subscribe((s, prev) => {
+  if (s.preferences.language !== prev.preferences.language) setActiveLanguage(s.preferences.language)
+})
 
 export type StoreApi = typeof useStore

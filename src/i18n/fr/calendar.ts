@@ -1,0 +1,40 @@
+import type { calendar as en } from '../en/calendar'
+
+export const calendar: Record<keyof typeof en, string> = {
+  // ---- calendar
+  'calendar.title': 'Calendrier',
+  'calendar.monthStats': '{done} faites · {planned} prévues',
+  'calendar.previousMonth': 'Mois précédent',
+  'calendar.nextMonth': 'Mois suivant',
+  'calendar.nothingLogged': 'Rien d’enregistré',
+  'calendar.restDay': 'Jour de repos',
+  'calendar.noSession': 'Pas de séance ce jour-là.',
+  'calendar.askToPlan': 'Demande à {name} de prévoir quelque chose ici.',
+  'calendar.planAWorkout': 'Prévoir une séance',
+  'calendar.movedFrom': 'déplacée depuis {day}',
+  'calendar.eventType.workout': 'séance',
+  'calendar.eventType.rest': 'repos',
+  'calendar.eventType.nutrition': 'nutrition',
+  'calendar.eventType.program': 'programme',
+  'calendar.eventType.note': 'note',
+  'calendar.planWith': 'Planifier avec {name}',
+  'calendar.chip.planWeek': 'Planifier ma semaine',
+  'calendar.chip.moveMonWed': 'Déplacer lundi → mercredi',
+  'calendar.chip.program12': 'Programme de 12 semaines',
+  'calendar.moveTitle': 'Déplacer {title}',
+  'calendar.movedTo': 'Déplacée à {day}',
+  'calendar.hasSession': 'déjà une séance',
+  // ---- prompts sent to the coach
+  'calendar.prompt.buildToday': 'Prépare ma séance du jour',
+  'calendar.prompt.planFor': 'Prépare une séance pour {weekday}',
+  'calendar.prompt.planWeek': 'Planifie ma semaine',
+  'calendar.prompt.moveMonWed': 'Déplace lundi à mercredi',
+  'calendar.prompt.program12': 'Crée-moi un programme de 12 semaines',
+  // ---- notifications
+  'calendar.notifications.markAllRead': 'Tout marquer comme lu',
+  'calendar.notifications.clear': 'Effacer',
+  'calendar.notifications.off': 'Les notifications sont désactivées.',
+  'calendar.notifications.nudges': 'Reçois aussi les rappels de {name} sur cet appareil.',
+  'calendar.notifications.allQuiet': 'Tout est calme',
+  'calendar.notifications.allQuietBody': '{name} ne te parle que quand ça compte : ton programme, ta récupération et un record de temps en temps.',
+}

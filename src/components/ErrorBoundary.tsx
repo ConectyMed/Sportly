@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { Button } from '@/components/ui/Button'
 import { CoachMark } from '@/components/ui/Primitives'
+import { t } from '@/i18n'
 
 interface State {
   error?: Error
@@ -24,11 +25,11 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
       <div className="min-h-dvh flex items-center justify-center px-6 text-center">
         <div className="max-w-[320px]">
           <CoachMark size={40} className="mx-auto" />
-          <h1 className="title text-[22px] mt-5">Something went wrong.</h1>
-          <p className="text-[14px] text-text-2 mt-2 text-pretty">Let’s try that again. Your data is safe on this device.</p>
+          <h1 className="title text-[22px] mt-5">{t('common.errorTitle')}</h1>
+          <p className="text-[14px] text-text-2 mt-2 text-pretty">{t('common.errorBody')}</p>
           <div className="mt-6 space-y-2">
             <Button variant="primary" full onClick={() => window.location.reload()}>
-              Retry
+              {t('common.retry')}
             </Button>
             <Button
               variant="ghost"
@@ -37,7 +38,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
                 window.location.href = import.meta.env.BASE_URL
               }}
             >
-              Back home
+              {t('common.backHome')}
             </Button>
           </div>
         </div>

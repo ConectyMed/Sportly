@@ -1,4 +1,6 @@
 import type { Workout, WorkoutSummary } from '@/domain/types'
+import { workoutTitle } from '@/domain/labels'
+import { t } from '@/i18n'
 import { formatShortDate } from '@/lib/dates'
 import { useStore } from '@/store/useStore'
 import { detectPRs } from './insights'
@@ -32,7 +34,7 @@ export function completeWorkoutRecord(workoutId: string, feeling?: WorkoutSummar
   }
   s.completeWorkout(workoutId, summary)
   ensureEventForWorkout({ ...w, status: 'completed' })
-  if (feeling) s.addMemory({ category: 'reaction', text: `${w.title} on ${formatShortDate(new Date())} felt ${feeling}${notes ? `: ${notes}` : ''}`, source: 'inferred', persistence: 'temporary' })
+  if (feeling) s.addMemory({ category: 'reaction', text: `${t('service.reaction.memory', { title: workoutTitle(w), date: formatShortDate(new Date()), feeling: t(`workout.feeling.${feeling}` as 'workout.feeling.great') })}${notes ? `: ${notes}` : ''}`, source: 'inferred', persistence: 'temporary' })
   return summary
 }
 

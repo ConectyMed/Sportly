@@ -21,7 +21,7 @@ Tests:
 
 ```bash
 pnpm test:unit      # vitest — intents, generators, coach behaviour
-pnpm test:e2e       # playwright — the ten product flows on iPhone + desktop
+pnpm test:e2e       # playwright — the product flows (incl. language switch) on iPhone + desktop
 pnpm typecheck && pnpm lint
 ```
 
@@ -32,6 +32,21 @@ On first launch choose **Meet your coach** (onboarding) or **Explore with a demo
 “What should I do today?” · “I’m tired” → “6” · “I slept badly” · “Make my workout” · “I only have 30 minutes” · “I only have dumbbells” · “Make it shorter” · “Replace squats” · “Create me a 12-week muscle-building program” · “What should I eat tonight?” · “I’m eating at a restaurant tonight” · “Analyze my progress” · “Why has my weight stopped moving?” · “Remember that I train at 7am” · “Move Monday to Wednesday” · “Plan my week” · “My goal is to bench 100 kg” · “Be more direct with me” · “Call you Max” · send a photo, a PDF or a voice note.
 
 Food and living state: “I ate 200 g chicken, rice and broccoli” · “There was more rice” · “I only ate half” · “Remove the sauce” · “Add it to lunch” · “What have I eaten today?” · “How much protein do I have left?” · “What would you choose: salmon, pasta or a burger?” · “I want to gain 5 kg” · “How does that affect my plan?” · “I can train four days this week” → “Actually make it three” · “I just finished my workout” · “Never give me burpees”.
+
+## Bilingual: French first, English preserved (V7)
+
+Sportly speaks French and English. The language is a preference (`preferences.language`, persisted, migrated: existing users stay in English; new users follow the browser, French if it is French, English otherwise) and switching it changes every screen, the coach, its chips, cards, notifications and dates immediately, without a reload. Change it under **Profile → Appearance → Language**.
+
+- **One source of truth.** `src/i18n/en/*` is the typed English dictionary; `src/i18n/fr/*` must carry exactly the same keys (TypeScript and a test enforce it). `t('home.today')`, `tn('common.sessions', n)` (Intl plural rules: “1 séance”, “2 séances”), `{name}` interpolation, deterministic fallback (fr → en → humanised key, never `undefined` or a raw key) and missing-key tracking for tests.
+- **Domain stays language-independent.** Workouts, programs, meals, foods, goals and exercises are stored as ids plus an English canonical name; `src/domain/labels.ts` renders them in the selected language (`workoutTitle`, `programDisplayName`, `exerciseName`, `foodName`, `goalLabel`…). The demo profile is one dataset; only its presentation changes.
+- **The coach is French, not translated.** `src/coach/localProvider.ts` speaks through a translator bound to the turn’s language, with its own French phrase banks for the personality dials (`src/coach/personality.ts`), locale-aware dates (`lundi 14 septembre`), numbers (`74,2 kg`) and plurals.
+- **One intent system.** `src/coach/intents.fr.ts` maps natural French (accent-tolerant, curly apostrophes) to the same structured intents as the English parser; the selected language’s parser runs first, the other one is a fallback, and every tool, generator and screen behaves identically. “Raccourcis-la.”, “Déplace-la à vendredi.”, “Supprime celui de demain.”, “Ajoute-le au déjeuner.”, “En fait, fais-en trois.”, “Et demain ?” resolve through the same reference mechanics as English.
+- **Provider-neutral.** `CoachContext.language` and `CoachModelInput.language` carry the selected language plus an explicit “respond in the user’s selected language, regardless of the language of their message” instruction for any future model; the built-in coach and a remote model get the same rule.
+- **Tests.** `src/i18n/__tests__` (dictionary completeness, placeholders, fallback, plurals, dates, numbers, persistence and migration, browser detection, a source scan for untranslated copy) and `src/coach/__tests__/french.test.ts` (the brief’s sentences, references, a full French journey through the real pipeline, personality in French, cross-language state, food scan in French). Playwright Flow 14 switches the language on the phone and desktop projects.
+
+Essayez : « Je veux prendre du muscle. » · « Fais-moi une séance. » · « Je n’ai que 30 minutes. » · « Raccourcis-la. » · « Je suis fatigué aujourd’hui. » → « 6 » · « J’ai mangé du poulet et du riz. » · « Il y avait plus de riz. » · « Il me reste combien de protéines ? » · « Déplace ma séance à vendredi. » · « Qu’est-ce qui est prévu cette semaine ? » · « Retiens que je n’aime pas les burpees. » · « Sois plus direct avec moi. »
+
+Known limits: the PWA manifest (name, shortcuts) and the knowledge base stay English; memories are stored in the language they were written in; a remote model is only instructed, not verified, to answer in the selected language.
 
 ## Plugging in the brain (V6)
 

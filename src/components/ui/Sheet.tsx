@@ -2,6 +2,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { useEffect, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
+import { useT } from '@/i18n/react'
 import { cn } from '@/lib/utils'
 
 export interface SheetProps {
@@ -18,6 +19,7 @@ export interface SheetProps {
 /** Bottom sheet on phones, centred dialog on larger screens. */
 export function Sheet({ open, onClose, title, children, size = 'auto', hideClose, className }: SheetProps) {
   const reduce = useReducedMotion()
+  const tr = useT()
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -68,7 +70,7 @@ export function Sheet({ open, onClose, title, children, size = 'auto', hideClose
               <div className="flex items-center justify-between px-5 pt-2 pb-2 sm:pt-5">
                 <h2 className="title text-[19px]">{title}</h2>
                 {!hideClose && (
-                  <button aria-label="Close" onClick={onClose} className="h-9 w-9 rounded-full bg-surface-2 text-text-2 flex items-center justify-center hover:text-text">
+                  <button aria-label={tr.t('common.close')} onClick={onClose} className="h-9 w-9 rounded-full bg-surface-2 text-text-2 flex items-center justify-center hover:text-text">
                     <X size={18} />
                   </button>
                 )}

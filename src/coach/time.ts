@@ -1,10 +1,15 @@
 import type { DayKey, ISODate } from '@/domain/types'
+import { t as translate } from '@/i18n'
+import { getLanguage } from '@/i18n/runtime'
+import type { Language } from '@/i18n/types'
 import { addDays, dayKey, startOfWeek } from '@/lib/dates'
+import { normalizeForMatching } from '@/lib/text'
 
 /**
  * Temporal context: one place that knows what “today”, “tomorrow”, “this week”
  * and “yesterday” mean for the current turn, so the coach never confuses what
- * was planned with what actually happened.
+ * was planned with what actually happened. Time words are understood in
+ * English and French; the frames themselves are language-independent.
  */
 export interface TemporalContext {
   now: ISODate
@@ -89,25 +94,28 @@ export function defaultModeFor(frame: TimeFrame): TimeMode {
 }
 
 /**
- * Read a timeframe and mode from free text. Returns undefined when the text does
- * not talk about a period at all, so callers can fall back to their own default.
+ * Read a timeframe and mode from free text (English or French). Returns
+ * undefined when the text does not talk about a period at all, so callers can
+ * fall back to their own default.
  */
 export function resolveTimeReference(text: string): TimeReference | undefined {
-  const t = text.toLowerCase().replace(/[’‘]/g, "'")
+  const t = normalizeForMatching(text)
   let frame: TimeFrame | undefined
-  if (/\byesterday\b/.test(t)) frame = 'yesterday'
-  else if (/\btomorrow\b/.test(t)) frame = 'tomorrow'
-  else if (/\bnext week\b/.test(t)) frame = 'next_week'
-  else if (/\blast week\b/.test(t)) frame = 'last_week'
-  else if (/\bthis week\b|\bthe week\b/.test(t)) frame = 'this_week'
-  else if (/\btoday\b|\btonight\b|\bthis (morning|afternoon|evening)\b/.test(t)) frame = 'today'
+  if (/\byesterday\b|\bhier\b/.test(t)) frame = 'yesterday'
+  else if (/\btomorrow\b|\bdemain\b/.test(t)) frame = 'tomorrow'
+  else if (/\bnext week\b|\bla semaine prochaine\b|\bsemaine pro\b|\bsemaine prochaine\b/.test(t)) frame = 'next_week'
+  else if (/\blast week\b|\bla semaine derniere\b|\bsemaine derniere\b|\bla semaine passee\b|\bsemaine passee\b/.test(t)) frame = 'last_week'
+  else if (/\bthis week\b|\bthe week\b|\bcette semaine\b|\bla semaine\b|\bma semaine\b/.test(t)) frame = 'this_week'
+  else if (/\btoday\b|\btonight\b|\bthis (morning|afternoon|evening)\b|\baujourd'hui\b|\bce soir\b|\bce matin\b|\bcet apres-midi\b|\bce midi\b|\bdu jour\b/.test(t)) frame = 'today'
   if (!frame) return undefined
-  const planned = /\b(was|were|is|are)\s+(planned|scheduled|on the (plan|schedule|calendar))\b|\bplanned for\b|\bsupposed to\b|\bon the plan\b|\bwhat'?s (planned|scheduled)\b/.test(t)
-  const did = /\b(did|have|had)\b.*\b(do|done|train|trained|eat|eaten|ate|log|logged|complete|completed)\b|\bwhat did i\b|\bhow did\b|\bwhat have i\b/.test(t)
+  const planned = /\b(was|were|is|are)\s+(planned|scheduled|on the (plan|schedule|calendar))\b|\bplanned for\b|\bsupposed to\b|\bon the plan\b|\bwhat'?s (planned|scheduled)\b|\b(etait|etaient|est|sont|avais|avait) (prevu|prevue|prevus|prevues|programme|programmee|au programme|au planning)\b|\bprevu pour\b|\bcense\b|\bcensee\b|\bqu'est-ce qui (etait|est) prevu\b|\bqu'est-ce que j'avais (de )?prevu\b|\bj'avais quoi\b|\bc'etait quoi le programme\b/.test(t)
+  const did = /\b(did|have|had)\b.*\b(do|done|train|trained|eat|eaten|ate|log|logged|complete|completed)\b|\bwhat did i\b|\bhow did\b|\bwhat have i\b|\bj'ai (fait|mange|pris|fini|termine|bouge|couru)\b|\bj'ai fait quoi\b|\bj'ai mange quoi\b|\bcomment (s'est|ca s'est|c'etait)\b|\bqu'ai-je\b|\best-ce que je me suis\b/.test(t)
   const mode: TimeMode = planned ? 'planned' : did ? 'did' : defaultModeFor(frame)
   return { frame, mode }
 }
 
-export function labelForFrame(frame: TimeFrame): string {
-  return { today: 'today', yesterday: 'yesterday', tomorrow: 'tomorrow', this_week: 'this week', next_week: 'next week', last_week: 'last week' }[frame]
+/** Human label for a frame in the given language: “yesterday” · “hier”. */
+export function labelForFrame(frame: TimeFrame, lang: Language = getLanguage()): string {
+  const key = { today: 'common.today', yesterday: 'common.yesterday', tomorrow: 'common.tomorrow', this_week: 'common.thisWeek', next_week: 'common.nextWeek', last_week: 'common.lastWeek' }[frame] as 'common.today'
+  return translate(key, undefined, lang).toLowerCase()
 }

@@ -1,7 +1,11 @@
 import { findExerciseByName } from '@/domain/exercises'
 import type { EquipmentId, ExpectSlot, GoalType, Meal, WorkoutFocus } from '@/domain/types'
+import { getLanguage } from '@/i18n/runtime'
+import type { Language } from '@/i18n/types'
+import { normalizeForMatching, straightenQuotes } from '@/lib/text'
 import type { MealCorrection } from './food/foodAnalysis'
 import { findFoodsInText } from './food/foodDatabase'
+import { parseIntentFr, parseMealCorrectionsFr, splitClausesFr } from './intents.fr'
 import { resolveTimeReference, type TimeFrame, type TimeMode } from './time'
 import { parseWeekday } from '@/lib/dates'
 
@@ -28,7 +32,9 @@ export type Intent =
   | { kind: 'forget'; text: string }
   | { kind: 'what_do_you_know' }
   | { kind: 'plan_week' }
-  | { kind: 'reschedule'; from?: number; to?: number; toRelative?: 'tomorrow' | 'today'; /** “Move that to Friday”: the session in conversation context. */ fromContext?: boolean }
+  | { kind: 'reschedule'; from?: number; to?: number; toRelative?: 'tomorrow' | 'today'; fromRelative?: 'tomorrow' | 'today'; /** “Move that to Friday”: the session in conversation context. */ fromContext?: boolean }
+  /** “What’s on Friday?”: what is planned or was done on the next occurrence of a weekday. */
+  | { kind: 'weekday_plan'; weekday: number }
   | { kind: 'set_goal'; goalType?: GoalType; metric?: 'body_weight' | 'bench_press' | 'squat' | 'deadlift' | 'workouts_per_week' | 'steps_per_day'; target?: number }
   | { kind: 'log_weight'; kg: number }
   | { kind: 'pain'; area?: string; severe: boolean }
@@ -87,92 +93,105 @@ export type WorkoutChange =
   | { type: 'focus'; focus: WorkoutFocus }
   | { type: 'regenerate' }
 
+/**
+ * Word lists are bilingual (English + accent-folded French): the same structured
+ * intent comes out whichever language the user writes in. Matching runs on
+ * folded, lower-case text; displayed content is never folded.
+ */
 const EQUIPMENT_WORDS: Array<[RegExp, EquipmentId]> = [
-  [/dumbbells?|db\b/i, 'dumbbell'],
-  [/barbell/i, 'barbell'],
+  [/dumbbells?|db\b|halteres?/i, 'dumbbell'],
+  [/barbell|\bbarre\b(?! de traction)|barre olympique/i, 'barbell'],
   [/kettlebells?|kb\b/i, 'kettlebell'],
-  [/cables?/i, 'cable'],
+  [/cables?|poulies?/i, 'cable'],
   [/machines?/i, 'machine'],
-  [/bands?/i, 'band'],
-  [/pull[- ]?up bar/i, 'pullup_bar'],
-  [/bench/i, 'bench'],
-  [/bodyweight|body weight|no equipment|nothing|without equipment|hotel room|at home/i, 'bodyweight'],
+  [/bands?|elastiques?|bandes? (elastiques?|de resistance)/i, 'band'],
+  [/pull[- ]?up bar|barre de traction|barre fixe/i, 'pullup_bar'],
+  [/bench|\bbanc\b/i, 'bench'],
+  [/bodyweight|body weight|no equipment|nothing|without equipment|hotel room|at home|poids du corps|poids de corps|sans materiel|sans equipement|rien du tout|a la maison|chambre d'hotel/i, 'bodyweight'],
 ]
 
 const FOCUS_WORDS: Array<[RegExp, WorkoutFocus]> = [
-  [/\bupper\b/i, 'upper'],
-  [/\blower\b/i, 'lower'],
-  [/\bpush\b/i, 'push'],
-  [/\bpull\b/i, 'pull'],
-  [/\blegs?\b/i, 'legs'],
-  [/full[- ]?body/i, 'full_body'],
-  [/cardio|conditioning|hiit|intervals|engine/i, 'conditioning'],
-  [/mobility|stretch|core/i, 'core_mobility'],
-  [/recovery|active recovery/i, 'recovery'],
+  [/\bupper\b|haut du corps|\bhaut\b/i, 'upper'],
+  [/\blower\b|bas du corps|\bbas\b/i, 'lower'],
+  [/\bpush\b|poussee|pousser/i, 'push'],
+  [/\bpull\b|tirage|tirer/i, 'pull'],
+  [/\blegs?\b|jambes?|cuisses/i, 'legs'],
+  [/full[- ]?body|corps entier|corps complet|tout le corps/i, 'full_body'],
+  [/cardio|conditioning|hiit|intervals|engine|intervalles|fractionne|condition physique/i, 'conditioning'],
+  [/mobility|stretch|core|mobilite|etirements?|gainage|abdos/i, 'core_mobility'],
+  [/recovery|active recovery|recuperation|recup\b/i, 'recovery'],
 ]
 
 const GOAL_WORDS: Array<[RegExp, GoalType]> = [
-  [/muscle|hypertrophy|bulk|bigger|size|gain/i, 'build_muscle'],
-  [/fat|lose weight|lean|cut|slim|shred/i, 'lose_fat'],
+  [/muscle|hypertrophy|bulk|bigger|size|gain|masse|muscler|prise de masse|volume musculaire/i, 'build_muscle'],
+  [/\bfat\b|lose weight|lean|\bcut\b|slim|shred|gras|graisse|perdre du poids|maigrir|secher|seche\b|mincir|affiner|perte de poids|perdre des kilos/i, 'lose_fat'],
   [/recomp/i, 'recomposition'],
-  [/condition|cardio|fitness engine|hiit/i, 'conditioning'],
-  [/strength|stronger|powerlift/i, 'strength'],
-  [/consisten|habit|routine/i, 'consistency'],
-  [/mobility|flexib/i, 'mobility'],
-  [/endurance|marathon|run/i, 'endurance'],
-  [/general|overall|healthy|health/i, 'general_fitness'],
+  [/condition|cardio|fitness engine|hiit|souffle/i, 'conditioning'],
+  [/strength|stronger|powerlift|\bforce\b|plus fort|plus forte|force athletique/i, 'strength'],
+  [/consisten|habit|routine|regularite|regulier|reguliere|assidu/i, 'consistency'],
+  [/mobility|flexib|mobilite|souplesse|souple/i, 'mobility'],
+  [/endurance|marathon|\brun\b|running|courir|course a pied|semi/i, 'endurance'],
+  [/general|overall|healthy|health|\bforme\b|sante|remise en forme|bien-etre|bien etre/i, 'general_fitness'],
 ]
 
 export function parseMinutes(text: string): number | undefined {
-  const m = text.match(/(\d{1,3})\s*(?:min|mins|minutes|m\b)/i)
+  const t = normalizeForMatching(text)
+  const m = t.match(/(\d{1,3})\s*(?:min|mins|minutes|mn\b|m\b)/)
   if (m) return Number(m[1])
-  const h = text.match(/(\d(?:[.,]\d)?)\s*(?:hours?|hrs?|h\b)/i)
+  const hm = t.match(/(\d)\s*h\s*(\d{2})\b/)
+  if (hm) return Number(hm[1]) * 60 + Number(hm[2])
+  const h = t.match(/(\d(?:[.,]\d)?)\s*(?:hours?|hrs?|heures?|h\b)/)
   if (h) return Math.round(Number(h[1].replace(',', '.')) * 60)
-  if (/half an hour/i.test(text)) return 30
-  if (/an hour/i.test(text)) return 60
-  if (/quarter of an hour|15 min/i.test(text)) return 15
+  if (/half an hour|demi[- ]heure|demie heure/.test(t)) return 30
+  if (/an hour|une heure/.test(t)) return 60
+  if (/quarter of an hour|15 min|quart d'heure/.test(t)) return 15
   return undefined
 }
 
 export function parseEquipment(text: string): EquipmentId[] | undefined {
+  const t = normalizeForMatching(text)
   const found: EquipmentId[] = []
-  for (const [re, id] of EQUIPMENT_WORDS) if (re.test(text)) found.push(id)
+  for (const [re, id] of EQUIPMENT_WORDS) if (re.test(t)) found.push(id)
   if (!found.length) return undefined
   if (found.includes('bodyweight') && found.length === 1) return ['bodyweight']
   return [...new Set(found)]
 }
 
-function parseFocus(text: string): WorkoutFocus | undefined {
-  for (const [re, f] of FOCUS_WORDS) if (re.test(text)) return f
+export function parseFocus(text: string): WorkoutFocus | undefined {
+  const t = normalizeForMatching(text)
+  for (const [re, f] of FOCUS_WORDS) if (re.test(t)) return f
   return undefined
 }
 
 export function parseGoalType(text: string): GoalType | undefined {
-  for (const [re, g] of GOAL_WORDS) if (re.test(text)) return g
+  const t = normalizeForMatching(text)
+  for (const [re, g] of GOAL_WORDS) if (re.test(t)) return g
   return undefined
 }
 
-function parseScale(text: string): number | undefined {
-  const m = text.match(/\b(10|[1-9])\b(?:\s*(?:\/|out of|of)\s*10)?/)
+export function parseScale(text: string): number | undefined {
+  const m = text.match(/\b(10|[1-9])\b(?:\s*(?:\/|out of|of|sur)\s*10)?/)
   return m ? Number(m[1]) : undefined
 }
 
-function parseWeeks(text: string): number | undefined {
-  const m = text.match(/(\d{1,2})\s*[- ]?\s*weeks?/i)
+export function parseWeeks(text: string): number | undefined {
+  const t = normalizeForMatching(text).replace(/\b(douze)\b/, '12').replace(/\b(huit)\b/, '8').replace(/\b(six)\b/, '6').replace(/\b(quatre)\b/, '4').replace(/\b(seize)\b/, '16')
+  const m = t.match(/(\d{1,2})\s*[- ]?\s*(?:weeks?|semaines?|sem\b)/)
   if (m) return Number(m[1])
-  const months = text.match(/(\d{1,2})\s*[- ]?\s*months?/i)
+  const months = t.match(/(\d{1,2})\s*[- ]?\s*(?:months?|mois)/)
   if (months) return Number(months[1]) * 4
-  if (/three months|quarter/i.test(text)) return 12
+  if (/three months|quarter|trois mois|un trimestre/.test(t)) return 12
   return undefined
 }
 
-function parseDaysPerWeek(text: string): number | undefined {
-  const m = text.match(/(\d)\s*(?:x|times|days?|sessions?)\s*(?:a|per|\/)\s*week/i)
+export function parseDaysPerWeek(text: string): number | undefined {
+  const t = normalizeForMatching(text).replace(/\b(deux)\b/, '2').replace(/\b(trois)\b/, '3').replace(/\b(quatre)\b/, '4').replace(/\b(cinq)\b/, '5').replace(/\b(six)\b/, '6')
+  const m = t.match(/(\d)\s*(?:x|times|days?|sessions?|fois|jours?|seances?)\s*(?:a|per|\/|par)\s*(?:week|semaine|sem\b)/)
   return m ? Number(m[1]) : undefined
 }
 
-function parseKg(text: string): number | undefined {
-  const m = text.match(/(\d{2,3}(?:[.,]\d)?)\s*(?:kg|kilos?|kilograms?)/i)
+export function parseKg(text: string): number | undefined {
+  const m = text.match(/(\d{2,3}(?:[.,]\d)?)\s*(?:kg|kilos?|kilograms?|kilogrammes?)/i)
   return m ? Number(m[1].replace(',', '.')) : undefined
 }
 
@@ -188,12 +207,31 @@ export interface ParseOptions {
   /** A meal (draft or logged) is in conversational context. */
   hasMeal?: boolean
   lastAvailabilityScope?: 'week' | 'always'
+  /** The user's selected language: its parser runs first, the other one is a fallback. */
+  language?: Language
 }
 
+/**
+ * USER MESSAGE → language-aware normalisation → intent understanding → one
+ * structured Intent, whatever the language. The selected language's parser is
+ * tried first; when it finds nothing the other language's parser gets a chance,
+ * so a French user typing an English chip (or vice versa) is still understood.
+ */
 export function parseIntent(raw: string, opts: ParseOptions): Intent {
+  const lang = opts.language ?? getLanguage()
+  const primary = lang === 'fr' ? parseIntentFr : parseIntentEn
+  const secondary = lang === 'fr' ? parseIntentEn : parseIntentFr
+  const first = primary(raw, opts)
+  if (first.kind !== 'unknown') return first
+  const second = secondary(raw, opts)
+  return second.kind !== 'unknown' ? second : first
+}
+
+/** The English parser. */
+export function parseIntentEn(raw: string, opts: ParseOptions): Intent {
   const text = raw.trim()
   // Phone keyboards type curly apostrophes; every pattern below assumes the straight one.
-  const t = text.toLowerCase().replace(/[’‘`´]/g, "'").replace(/[“”]/g, '"')
+  const t = straightenQuotes(text.toLowerCase())
   if (opts.hasAttachments && !t) return { kind: 'attachment' }
 
   // ---- Slot answers first: the coach asked a question and the user answered.
@@ -306,13 +344,18 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   // ---- Meal in context: corrections, commit, discard
   // “I had X” starts a new meal unless it is clearly an addition (“I also had…”).
   const startsNewMeal = /^(i )?(just )?(ate|had|have eaten|'?ve had|'?ve eaten)\b/.test(t) && !/\b(also|too|as well|on top|with it|to it|plus)\b/.test(t)
+  // A correction must be about food: a known food, a portion word or a meal slot, and nothing about training, programs or goals.
+  const mealish = findFoodsInText(t).length > 0 || /\b(half|third|quarter|double|twice|sauce|portion|plate|meal|breakfast|lunch|dinner|snack)\b/.test(t)
+  const notMeal = /\b(workout|session|training|program|week|weeks|minutes?|goal|exercises?|sets?|weight|kg|calendar|tired|slept|direct|progress|mobility|cardio|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(t)
   if (opts.hasMeal && !startsNewMeal) {
     if (/^(add|log|save|put)\b.*\b(it|this|that|the meal|meal)\b|^(log|add|save) it|^(looks|that'?s|it'?s) (right|correct|good|fine)|^(confirm|yes,? (log|add) it)/.test(t) || /^(add|log) (it |this |that )?(to|as) (my )?(breakfast|lunch|dinner|snack)/.test(t)) {
       return { kind: 'meal_commit', slot: parseSlot(t) }
     }
     if (/^(don'?t|do not) (log|add|save)|^(discard|forget|scrap|delete|remove) (it|this|that|the meal|that meal)|^never mind|^cancel (it|that|the meal)/.test(t)) return { kind: 'meal_discard' }
-    const corrections = parseMealCorrections(text)
-    if (corrections.length) return { kind: 'meal_correction', corrections }
+    if (mealish && !notMeal) {
+      const corrections = parseMealCorrections(text)
+      if (corrections.length) return { kind: 'meal_correction', corrections }
+    }
   }
 
   // ---- Food journal: logging
@@ -354,8 +397,8 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   const dislike = t.match(/\b(?:i )?(?:hate|can'?t stand|don'?t like|dislike|never (?:give me|make me do|program)|no more|stop giving me|not a fan of)\s+([a-z][a-z\- ]{2,30}?)(?:\s+(?:please|today|anymore|again)|[.,!]|$)/)
   if (dislike && !/(this|it|that|the (plan|program|workout))$/.test(dislike[1].trim())) return { kind: 'dislike_exercise', text: dislike[1].trim() }
   // “I changed my goal” is a request to set it (handled by the goal block below); “how does that affect my plan” is the impact question.
-  if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|does (that|this) change (my|the) plan)\b/.test(t)) return { kind: 'goal_impact' }
-  if (/^(what about|what'?s|and|how about)\s+(?:(?:on|up|planned|happening|scheduled)\s+(?:for\s+)?)?tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have|doing|training) tomorrow|\b(am i|do i) (train|training|working out|lifting) tomorrow/.test(t) && !/meal|eat|food/.test(t)) {
+  if (/\b(how does (that|this|it) (affect|change|impact)|what (changes|does that change|does that mean for)|does (that|this) change (my|the) plan|what am i training for|what'?s my goal|what is my goal|what are my goals|remind me (of )?my goal)\b/.test(t)) return { kind: 'goal_impact' }
+  if (/^(what about|what'?s|and|how about)\s+(?:(?:on|up|planned|happening|scheduled)\s+(?:for\s+)?)?tomorrow\b|^tomorrow\??$|\btomorrow'?s (plan|workout|session)\b|what (am i|do i) (do|have|doing|training) tomorrow|\b(am i|do i) (train|training|working out|lifting) tomorrow/.test(t) && !/meal|eat|food/.test(t) && !/\b(move|reschedule|push|shift|delete|remove|cancel|skip)\b/.test(t)) {
     // “And tomorrow?” keeps the domain of what we were just talking about.
     if (opts.topic === 'nutrition' && /^(and|what about|how about)\s+tomorrow/.test(t)) return { kind: 'day_report', frame: 'tomorrow', mode: 'upcoming', domain: 'food' }
     return { kind: 'tomorrow' }
@@ -410,16 +453,20 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
     const toWord = move[3]
     return toWord.startsWith('tom') || toWord.startsWith('tod') ? { kind: 'reschedule', from, toRelative: toWord.startsWith('tom') ? 'tomorrow' : 'today' } : { kind: 'reschedule', from, to: parseWeekday(toWord) ?? undefined }
   }
+  if (/^(?:can you |please )?(?:move|push|shift|reschedule)\s+(?:it|that|this|that one|this one)\s+(?:to\s+)?(?:another|a different|some other)\s+(?:day|date|time)/.test(t)) return { kind: 'reschedule', fromContext: true }
   const moveThat = t.match(/^(?:can you |please )?(?:move|push|shift|reschedule|switch)\s+(?:it|that|this|that one|this one)\s+(?:to|for|onto)\s+(tomorrow|today|mon|tue|wed|thu|fri|sat|sun)[a-z]*/)
   if (moveThat) {
     const w = moveThat[1]
     return w.startsWith('tom') || w.startsWith('tod') ? { kind: 'reschedule', fromContext: true, toRelative: w.startsWith('tom') ? 'tomorrow' : 'today' } : { kind: 'reschedule', fromContext: true, to: parseWeekday(w) ?? undefined }
   }
-  const moveTodays = t.match(/\b(move|reschedule|push|shift)\b.*\b(today'?s|this|my)?\s*(workout|session)\b.*\b(to\s+)?(tomorrow|mon|tue|wed|thu|fri|sat|sun)[a-z]*/)
+  const moveTodays = t.match(/\b(move|reschedule|push|shift)\b.*?\b(today'?s|tomorrow'?s|this|my)?\s*(workout|session)\b.*\b(to\s+)?(tomorrow|mon|tue|wed|thu|fri|sat|sun)[a-z]*/)
   if (moveTodays) {
     const w = moveTodays[5]
-    return w.startsWith('tom') ? { kind: 'reschedule', toRelative: 'tomorrow' } : { kind: 'reschedule', to: parseWeekday(w) ?? undefined }
+    const fromRelative = moveTodays[2]?.startsWith('tomorrow') ? ('tomorrow' as const) : undefined
+    return w.startsWith('tom') ? { kind: 'reschedule', toRelative: 'tomorrow', fromRelative } : { kind: 'reschedule', to: parseWeekday(w) ?? undefined, fromRelative }
   }
+  const weekdayPlan = t.match(/^(?:what'?s|what is|what do i have|what have i got|what'?s planned|what is planned|what'?s on)\s+(?:on\s+|for\s+)?(mon|tue|wed|thu|fri|sat|sun)[a-z]*\??$/)
+  if (weekdayPlan) return { kind: 'weekday_plan', weekday: parseWeekday(weekdayPlan[1]) ?? 1 }
   if (/\b(plan|organi[sz]e|schedule|map out|structure)\b.*\b(my |the |this )?week\b/.test(t) || /^(week plan|weekly plan)/.test(t)) return { kind: 'plan_week' }
 
   // ---- Progress
@@ -474,7 +521,8 @@ export function parseIntent(raw: string, opts: ParseOptions): Intent {
   }
   if (/^(workout|make my workout|today'?s workout|build my workout|build today'?s workout)$/.test(t)) return { kind: 'make_workout', constraints: {} }
   if (/\b(plan|build|prep|prepare|set up)\b.*\btomorrow\b|^plan tomorrow/.test(t) && !/meal|eat|food/.test(t)) return { kind: 'make_workout', constraints: { forDate: 'tomorrow' } }
-  if (/\b(i )?only have (\d+)|\bi have (\d+) ?min|\b(\d+) ?min(ute)?s? (today|only)|got (\d+) ?min/.test(t)) return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
+  if (/\b(i )?only have (\d+)|\bi have (\d+) ?min|\b(\d+) ?min(ute)?s? (today|only)|got (\d+) ?min|\b(give me|i want|make it|i need) (\d+) ?min/.test(t) && !/meal|eat/.test(t)) return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
+  if (/\b(mobility|stretching|stretch)\b/.test(t) && /\b(give me|just|instead|gentle|flow|session|a bit of|some|do)\b/.test(t) && !/program|meal/.test(t)) return { kind: 'make_workout', constraints: { ...parseWorkoutConstraints(t), focus: 'core_mobility', intensity: 'light', minutes: parseMinutes(t) ?? 20 } }
   if (/\b(i )?only have (dumbbells?|bands?|a kettlebell|bodyweight)|\bno gym\b|\bat home today\b|\bhotel gym\b/.test(t)) return { kind: 'make_workout', constraints: parseWorkoutConstraints(t) }
 
   // ---- Day state
@@ -530,21 +578,22 @@ function parsePersonality(t: string): { motivation?: number; tone?: number; humo
 }
 
 
+/** Meal slot from English or French words (“lunch”, “au déjeuner”, “ce soir”). */
 export function parseSlot(t: string): Meal['slot'] | undefined {
-  const s = t.toLowerCase()
-  if (/\bbreakfast\b/.test(s)) return 'breakfast'
-  if (/\blunch\b/.test(s)) return 'lunch'
-  if (/\bdinner\b|\btonight\b|\bsupper\b/.test(s)) return 'dinner'
-  if (/\bsnack\b/.test(s)) return 'snack'
-  if (/\bpre[- ]?workout\b/.test(s)) return 'pre_workout'
-  if (/\bpost[- ]?workout\b|\bafter (my |the )?workout\b/.test(s)) return 'post_workout'
+  const s = normalizeForMatching(t)
+  if (/\bbreakfast\b|petit[- ]dej(?:euner)?\b|\bpetit dej\b|\bau reveil\b|\ble matin\b|\bce matin\b/.test(s)) return 'breakfast'
+  if (/\blunch\b|\bdejeuner\b|\bce midi\b|\ba midi\b|\ble midi\b/.test(s)) return 'lunch'
+  if (/\bdinner\b|\btonight\b|\bsupper\b|\bdiner\b|\bce soir\b|\ble soir\b|\bsouper\b/.test(s)) return 'dinner'
+  if (/\bsnack\b|\bcollation\b|\bgouter\b|\bencas\b|\ben-cas\b/.test(s)) return 'snack'
+  if (/\bpre[- ]?workout\b|\bavant (la |ma |l')?(seance|entrainement|sport)\b|\bpre[- ]?seance\b/.test(s)) return 'pre_workout'
+  if (/\bpost[- ]?workout\b|\bafter (my |the )?workout\b|\bapres (la |ma |l')?(seance|entrainement|sport)\b|\bpost[- ]?seance\b/.test(s)) return 'post_workout'
   return undefined
 }
 
-function wordToNumber(w: string): number | undefined {
-  const map: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 }
+export function wordToNumber(w: string): number | undefined {
+  const map: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, zero: 0 }
   if (/^\d$/.test(w)) return Number(w)
-  return map[w]
+  return map[normalizeForMatching(w)]
 }
 
 /** Split “salmon with rice, chicken pasta or a burger and fries” into dishes; “and” only separates inside a comma list. */
@@ -561,8 +610,15 @@ function splitOptions(text: string): string[] {
     .slice(0, 6)
 }
 
-/** Parse natural corrections to a meal in context. Order-preserving; several can stack. */
-export function parseMealCorrections(raw: string): MealCorrection[] {
+/** Parse natural corrections to a meal in context, in either language. Order-preserving; several can stack. */
+export function parseMealCorrections(raw: string, language: Language = getLanguage()): MealCorrection[] {
+  const primary = language === 'fr' ? parseMealCorrectionsFr : parseMealCorrectionsEn
+  const secondary = language === 'fr' ? parseMealCorrectionsEn : parseMealCorrectionsFr
+  const first = primary(raw)
+  return first.length ? first : secondary(raw)
+}
+
+export function parseMealCorrectionsEn(raw: string): MealCorrection[] {
   const t = raw.toLowerCase().replace(/[’‘`´]/g, "'").replace(/[.!]+$/, '')
   const out: MealCorrection[] = []
   const slot = parseSlot(t)
@@ -662,14 +718,12 @@ const COMPOUND_ORDER: Partial<Record<Intent['kind'], number>> = {
  */
 export function splitCompound(text: string, opts: ParseOptions): CompoundPart[] | undefined {
   if (opts.expects) return undefined
-  const clauses = text
-    .split(/\s*[,;]\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?(?=i\b|i'|train|create|make|plan|build|remember|set|log|give|move|call|be\b|eat|only|also|my|make|a\b|an\b|the\b)|\s+then\s+/i)
-    .map((c) => c.trim())
-    .filter((c) => c.length > 2)
+  const lang = opts.language ?? getLanguage()
+  const clauses = (lang === 'fr' ? splitClausesFr(text) : splitClausesEn(text)).map((c) => c.trim()).filter((c) => c.length > 2)
   if (clauses.length < 2) return undefined
   const parts: CompoundPart[] = []
   for (const clause of clauses) {
-    const intent = parseIntent(clause, { topic: opts.topic })
+    const intent = parseIntent(clause, { topic: opts.topic, language: lang })
     const order = COMPOUND_ORDER[intent.kind]
     if (order === undefined) continue
     if (parts.some((p) => p.intent.kind === intent.kind)) continue
@@ -677,4 +731,8 @@ export function splitCompound(text: string, opts: ParseOptions): CompoundPart[] 
   }
   if (parts.length < 2) return undefined
   return parts.sort((a, b) => (COMPOUND_ORDER[a.intent.kind] ?? 9) - (COMPOUND_ORDER[b.intent.kind] ?? 9))
+}
+
+function splitClausesEn(text: string): string[] {
+  return text.split(/\s*[,;]\s*(?:and\s+|then\s+)?|\s+and\s+(?:then\s+)?(?=i\b|i'|train|create|make|plan|build|remember|set|log|give|move|call|be\b|eat|only|also|my|make|a\b|an\b|the\b)|\s+then\s+/i)
 }

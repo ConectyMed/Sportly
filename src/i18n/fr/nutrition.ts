@@ -1,0 +1,30 @@
+import type { nutrition as en } from '../en/nutrition'
+
+export const nutrition: Record<keyof typeof en, string> = {
+  'nutrition.title': 'Nutrition',
+  'nutrition.differentMeals': 'D’autres repas',
+  'nutrition.trainingDay': 'Jour d’entraînement',
+  'nutrition.restDay': 'Jour de repos',
+  'nutrition.eatenToday': 'Mangé aujourd’hui',
+  'nutrition.nothingLogged': 'Rien d’enregistré pour l’instant. Dis à {name} ce que tu as mangé ou envoie une photo.',
+  'nutrition.logMeal': 'Noter un repas',
+  'nutrition.prefillAte': 'J’ai mangé ',
+  'nutrition.photo': 'Photo',
+  'nutrition.prefillAteThis': 'J’ai mangé ça',
+  'nutrition.plannedMeals': 'Repas prévus',
+  'nutrition.adjustWith': 'Ajuster avec {name}',
+  'nutrition.chipEatingOut': 'Resto ce soir',
+  'nutrition.promptEatingOut': 'Je mange au restaurant ce soir',
+  'nutrition.chipLowerCarb': 'Moins de glucides',
+  'nutrition.promptLowerCarb': 'Moins de glucides',
+  'nutrition.chipDinner': 'Idées pour le dîner',
+  'nutrition.promptDinner': 'Qu’est-ce que je mange ce soir ?',
+  'nutrition.chipWhatsLeft': 'Il me reste quoi ?',
+  'nutrition.promptWhatsLeft': 'Il me reste combien de protéines ?',
+  'nutrition.chipMoreProtein': 'Plus de protéines',
+  'nutrition.promptMoreProtein': 'J’ai du mal à atteindre mes protéines, aide-moi',
+  // ---- fiche de modification d’un repas
+  'nutrition.portionEaten': 'Portion mangée',
+  'nutrition.items': 'Aliments',
+  'nutrition.removeItem': 'Retirer {name}',
+}

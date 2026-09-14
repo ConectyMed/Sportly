@@ -9,10 +9,10 @@ import { Chip } from '@/components/ui/Chip'
 import { CoachMark, Stepper, TextInput } from '@/components/ui/Primitives'
 import { Slider } from '@/components/ui/Slider'
 import { buildDemoSeed } from '@/domain/demo'
-import { EQUIPMENT_LABELS } from '@/domain/exercises'
-import { DIET_LABELS, DIETARY_FLAG_LABELS, GOAL_DESCRIPTIONS, GOAL_LABELS, LEVEL_DESCRIPTIONS, LEVEL_LABELS } from '@/domain/labels'
+import { DIETARY_FLAGS, DIETS, LEVELS, dietLabel, dietaryFlagLabel, equipmentLabel, goalDescription, goalLabel, levelDescription, levelLabel } from '@/domain/labels'
 import type { CoachPersonality, DietPreference, DietaryFlag, EquipmentId, FitnessLevel, Goal, GoalType, MemoryItem, UserProfile } from '@/domain/types'
-import { WEEKDAY_SHORT } from '@/lib/dates'
+import { weekdayInitials } from '@/i18n'
+import { useT } from '@/i18n/react'
 import { cn, formatMinutes, uid } from '@/lib/utils'
 import { DEFAULT_PERSONALITY, useStore } from '@/store/useStore'
 
@@ -45,6 +45,7 @@ interface Draft {
 
 export function OnboardingScreen() {
   const navigate = useNavigate()
+  const tr = useT()
   const onboarded = useStore((s) => s.onboarded)
   const completeOnboarding = useStore((s) => s.completeOnboarding)
   const seed = useStore((s) => s.seed)
@@ -121,16 +122,19 @@ export function OnboardingScreen() {
       createdAt: now,
     }
     const goals: Goal[] = []
-    if (d.primary) goals.push({ id: uid('goal'), type: d.primary, rank: 'primary', label: GOAL_LABELS[d.primary], createdAt: now, ...(d.primary === 'build_muscle' || d.primary === 'lose_fat' ? { metric: 'body_weight', startValue: d.weightKg, targetValue: d.primary === 'build_muscle' ? d.weightKg + 3 : d.weightKg - 4, targetUnit: 'kg' } : {}) })
-    if (d.secondary) goals.push({ id: uid('goal'), type: d.secondary, rank: 'secondary', label: GOAL_LABELS[d.secondary], createdAt: now })
+    // goal.label is the stored English canonical label; screens render goalLabel(goal.type).
+    if (d.primary) goals.push({ id: uid('goal'), type: d.primary, rank: 'primary', label: goalLabel(d.primary, 'en'), createdAt: now, ...(d.primary === 'build_muscle' || d.primary === 'lose_fat' ? { metric: 'body_weight', startValue: d.weightKg, targetValue: d.primary === 'build_muscle' ? d.weightKg + 3 : d.weightKg - 4, targetUnit: 'kg' } : {}) })
+    if (d.secondary) goals.push({ id: uid('goal'), type: d.secondary, rank: 'secondary', label: goalLabel(d.secondary, 'en'), createdAt: now })
     const mem = (category: MemoryItem['category'], text: string): MemoryItem => ({ id: uid('mem'), category, text, source: 'onboarding', createdAt: now })
+    const equipmentList = d.equipment.map((e) => equipmentLabel(e, tr.lang).toLowerCase()).join(', ') || tr.t('onboarding.mem.bodyweightOnly')
+    const dietText = dietLabel(d.diet, tr.lang).toLowerCase()
     const memory: MemoryItem[] = [
-      ...(d.primary ? [mem('goal', `Primary goal: ${GOAL_LABELS[d.primary].toLowerCase()}`)] : []),
-      ...(d.secondary ? [mem('goal', `Secondary goal: ${GOAL_LABELS[d.secondary].toLowerCase()}`)] : []),
-      mem('availability', `Trains ${d.preferredDays.length} days a week (${d.preferredDays.map((x) => WEEKDAY_SHORT[x]).join(', ')}), about ${formatMinutes(d.sessionMinutes)} per session`),
-      mem('equipment', `${d.trainsAt === 'gym' ? 'Trains at a gym' : d.trainsAt === 'home' ? 'Trains at home' : 'Trains at the gym and at home'} with ${d.equipment.map((e) => EQUIPMENT_LABELS[e].toLowerCase()).join(', ') || 'bodyweight only'}`),
-      mem('nutrition', `Diet: ${DIET_LABELS[d.diet].toLowerCase()}${d.flags.length ? ` (${d.flags.map((f) => DIETARY_FLAG_LABELS[f].toLowerCase()).join(', ')})` : ''}`),
-      mem('history', `${LEVEL_LABELS[d.level]} level when we started`),
+      ...(d.primary ? [mem('goal', tr.t('onboarding.mem.primaryGoal', { goal: goalLabel(d.primary, tr.lang).toLowerCase() }))] : []),
+      ...(d.secondary ? [mem('goal', tr.t('onboarding.mem.secondaryGoal', { goal: goalLabel(d.secondary, tr.lang).toLowerCase() }))] : []),
+      mem('availability', tr.t('onboarding.mem.availability', { days: tr.tn('common.days', d.preferredDays.length), list: d.preferredDays.map((x) => tr.weekday(x, true)).join(', '), minutes: formatMinutes(d.sessionMinutes, tr.lang) })),
+      mem('equipment', tr.t('onboarding.mem.equipment', { where: tr.t(`onboarding.mem.trainsAt.${d.trainsAt}`), equipment: equipmentList })),
+      mem('nutrition', d.flags.length ? tr.t('onboarding.mem.dietFlags', { diet: dietText, flags: d.flags.map((f) => dietaryFlagLabel(f, tr.lang).toLowerCase()).join(', ') }) : tr.t('onboarding.mem.diet', { diet: dietText })),
+      mem('history', tr.t('onboarding.mem.level', { level: levelLabel(d.level, tr.lang) })),
     ]
     completeOnboarding({ user, goals, coach: { name: d.coachName.trim(), personality: d.personality, provider: 'local', anthropicModel: 'claude-sonnet-5' }, memory })
     startFirstConversation()
@@ -145,17 +149,17 @@ export function OnboardingScreen() {
 
   const progress = stepIdx / (STEPS.length - 1)
   const voicePreview = useMemo(() => {
-    const v = buildVoice(d.personality)
+    const v = buildVoice(d.personality, tr.lang)
     return v.compose({
-      core: `Today is upper body, about ${formatMinutes(d.sessionMinutes)}.`,
-      reason: 'It is next in your rotation and your recovery looks good.',
-      soft: 'If you are up for it,',
-      push: 'Let’s make it count.',
-      calm: 'Take it at your pace.',
-      quip: 'Gravity is not going to lift itself.',
-      extra: 'I bumped the bench by 2.5 kg since you completed every set last time.',
+      core: tr.t('onboarding.preview.core', { minutes: formatMinutes(d.sessionMinutes, tr.lang) }),
+      reason: tr.t('onboarding.preview.reason'),
+      soft: tr.t('onboarding.preview.soft'),
+      push: tr.t('onboarding.preview.push'),
+      calm: tr.t('onboarding.preview.calm'),
+      quip: tr.t('onboarding.preview.quip'),
+      extra: tr.t('onboarding.preview.extra'),
     })
-  }, [d.personality, d.sessionMinutes])
+  }, [d.personality, d.sessionMinutes, tr])
 
   const variants = {
     enter: (dir: number) => ({ opacity: 0, x: reduce ? 0 : dir * 28 }),
@@ -168,7 +172,7 @@ export function OnboardingScreen() {
       {step !== 'welcome' && (
         <div className="pt-safe px-4">
           <div className="flex items-center gap-3 h-14">
-            <button aria-label="Back" onClick={() => go(-1)} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
+            <button aria-label={tr.t('common.back')} onClick={() => go(-1)} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
               <ChevronLeft size={22} />
             </button>
             <div className="flex-1 h-1 rounded-full bg-surface-2 overflow-hidden">
@@ -194,82 +198,82 @@ export function OnboardingScreen() {
                     Sportly
                   </motion.h1>
                   <motion.p className="text-[17px] text-text-2 mt-2" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}>
-                    Your Coach Daily
+                    {tr.t('common.tagline')}
                   </motion.p>
                   <motion.p className="text-[15px] text-text-3 mt-8 max-w-[300px] text-pretty leading-relaxed" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}>
-                    A personal AI coach for training, nutrition and everyday fitness. Available 24/7, learning from you, adapting to you.
+                    {tr.t('onboarding.welcomeBody')}
                   </motion.p>
                 </div>
                 <motion.div className="space-y-3 pb-safe" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }}>
                   <Button variant="primary" size="lg" full onClick={() => go(1)} iconRight={<ArrowRight size={18} />}>
-                    Meet your coach
+                    {tr.t('onboarding.meetYourCoach')}
                   </Button>
                   <Button variant="ghost" size="lg" full onClick={loadDemo}>
-                    Explore with a demo profile
+                    {tr.t('onboarding.exploreDemo')}
                   </Button>
-                  <p className="text-center text-[12px] text-text-4 pt-1">Everything stays on this device.</p>
+                  <p className="text-center text-[12px] text-text-4 pt-1">{tr.t('onboarding.staysOnDevice')}</p>
                 </motion.div>
               </div>
             )}
 
             {step === 'name' && (
-              <StepFrame q="Let’s start simple. What should I call you?" hint="First name is perfect.">
-                <TextInput autoFocus value={d.name} onChange={(e) => patch({ name: e.target.value })} placeholder="Your name" onKeyDown={(e) => e.key === 'Enter' && canContinue && go(1)} maxLength={32} autoComplete="given-name" />
+              <StepFrame q={tr.t('onboarding.nameQ')} hint={tr.t('onboarding.nameHint')}>
+                <TextInput autoFocus value={d.name} onChange={(e) => patch({ name: e.target.value })} placeholder={tr.t('onboarding.namePlaceholder')} onKeyDown={(e) => e.key === 'Enter' && canContinue && go(1)} maxLength={32} autoComplete="given-name" />
               </StepFrame>
             )}
 
             {step === 'basics' && (
-              <StepFrame q={`Nice to meet you, ${d.name.trim() || 'friend'}. A few numbers so I can calibrate loads and food.`} hint="You can change these any time.">
+              <StepFrame q={tr.t('onboarding.basicsQ', { name: d.name.trim() || tr.t('onboarding.friend') })} hint={tr.t('onboarding.basicsHint')}>
                 <div className="space-y-4">
-                  <Row label="Age">
+                  <Row label={tr.t('profile.age')}>
                     <Stepper value={d.age} min={14} max={90} onChange={(v) => patch({ age: v })} />
                   </Row>
-                  <Row label="Height">
-                    <Stepper value={d.heightCm} min={120} max={230} unit="cm" onChange={(v) => patch({ heightCm: v })} />
+                  <Row label={tr.t('profile.height')}>
+                    <Stepper value={d.heightCm} min={120} max={230} unit={tr.t('common.cm')} onChange={(v) => patch({ heightCm: v })} />
                   </Row>
-                  <Row label="Weight">
-                    <Stepper value={d.weightKg} min={35} max={250} step={0.5} unit="kg" format={(v) => v.toFixed(1)} onChange={(v) => patch({ weightKg: v })} />
+                  <Row label={tr.t('profile.weight')}>
+                    <Stepper value={d.weightKg} min={35} max={250} step={0.5} unit={tr.t('common.kg')} format={(v) => tr.dec(v, 1)} onChange={(v) => patch({ weightKg: v })} />
                   </Row>
-                  <Row label="Sex">
+                  <Row label={tr.t('onboarding.sex')}>
                     <div className="flex gap-2">
                       {(['male', 'female', 'unspecified'] as const).map((s) => (
                         <Chip key={s} size="sm" selected={d.sex === s} onClick={() => patch({ sex: s })}>
-                          {s === 'unspecified' ? 'Skip' : s === 'male' ? 'Male' : 'Female'}
+                          {tr.t(`sex.${s}`)}
                         </Chip>
                       ))}
                     </div>
                   </Row>
-                  <p className="text-[12px] text-text-4">Used only to estimate calories more accurately.</p>
+                  <p className="text-[12px] text-text-4">{tr.t('onboarding.sexNote')}</p>
                 </div>
               </StepFrame>
             )}
 
             {step === 'level' && (
-              <StepFrame q="Where are you with training right now?">
+              <StepFrame q={tr.t('onboarding.levelQ')}>
                 <div className="space-y-2">
-                  {(Object.keys(LEVEL_LABELS) as FitnessLevel[]).map((lvl) => (
-                    <OptionCard key={lvl} selected={d.level === lvl} title={LEVEL_LABELS[lvl]} body={LEVEL_DESCRIPTIONS[lvl]} onClick={() => patch({ level: lvl })} />
+                  {LEVELS.map((lvl) => (
+                    <OptionCard key={lvl} selected={d.level === lvl} title={levelLabel(lvl)} body={levelDescription(lvl)} onClick={() => patch({ level: lvl })} />
                   ))}
                 </div>
               </StepFrame>
             )}
 
             {step === 'goal' && (
-              <StepFrame q="What matters most to you right now?" hint="Your primary goal shapes every session and every meal.">
+              <StepFrame q={tr.t('onboarding.goalQ')} hint={tr.t('onboarding.goalHint')}>
                 <div className="space-y-2">
                   {GOAL_OPTIONS.map((g) => (
-                    <OptionCard key={g} selected={d.primary === g} title={GOAL_LABELS[g]} body={GOAL_DESCRIPTIONS[g]} onClick={() => patch({ primary: g, secondary: d.secondary === g ? undefined : d.secondary })} compact />
+                    <OptionCard key={g} selected={d.primary === g} title={goalLabel(g)} body={goalDescription(g)} onClick={() => patch({ primary: g, secondary: d.secondary === g ? undefined : d.secondary })} compact />
                   ))}
                 </div>
               </StepFrame>
             )}
 
             {step === 'secondary' && (
-              <StepFrame q="Anything on the side?" hint="Optional. A secondary goal I will weave in without diluting the main one.">
+              <StepFrame q={tr.t('onboarding.secondaryQ')} hint={tr.t('onboarding.secondaryHint')}>
                 <div className="flex flex-wrap gap-2">
                   {GOAL_OPTIONS.filter((g) => g !== d.primary).map((g) => (
                     <Chip key={g} selected={d.secondary === g} onClick={() => patch({ secondary: d.secondary === g ? undefined : g })}>
-                      {GOAL_LABELS[g]}
+                      {goalLabel(g)}
                     </Chip>
                   ))}
                 </div>
@@ -277,7 +281,7 @@ export function OnboardingScreen() {
             )}
 
             {step === 'availability' && (
-              <StepFrame q="When can you realistically train?" hint="Pick the days that usually work. I will plan around them and adapt when life happens.">
+              <StepFrame q={tr.t('onboarding.availabilityQ')} hint={tr.t('onboarding.availabilityHint')}>
                 <div className="space-y-6">
                   <div className="flex justify-between">
                     {[1, 2, 3, 4, 5, 6, 0].map((day) => {
@@ -289,26 +293,26 @@ export function OnboardingScreen() {
                           onClick={() => patch({ preferredDays: on ? d.preferredDays.filter((x) => x !== day) : [...d.preferredDays, day].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)) })}
                           className={cn('h-12 w-12 rounded-full text-[13px] font-semibold transition-colors', on ? 'bg-accent text-accent-ink' : 'bg-surface text-text-2 border border-border')}
                         >
-                          {WEEKDAY_SHORT[day].slice(0, 2)}
+                          {weekdayInitials(day, tr.lang)}
                         </button>
                       )
                     })}
                   </div>
                   <div className="text-center text-[14px] text-text-2">
-                    <span className="text-text font-semibold">{d.preferredDays.length}</span> {d.preferredDays.length === 1 ? 'day' : 'days'} a week
+                    <span className="text-text font-semibold">{d.preferredDays.length}</span> {tr.tn('onboarding.daysAWeek', d.preferredDays.length)}
                   </div>
-                  <Slider label="Session length" value={d.sessionMinutes} min={20} max={90} step={5} onChange={(v) => patch({ sessionMinutes: v })} format={(v) => formatMinutes(v)} leftLabel="20 min" rightLabel="90 min" />
+                  <Slider label={tr.t('profile.sessionLength')} value={d.sessionMinutes} min={20} max={90} step={5} onChange={(v) => patch({ sessionMinutes: v })} format={(v) => formatMinutes(v)} leftLabel={`20 ${tr.t('common.min')}`} rightLabel={`90 ${tr.t('common.min')}`} />
                 </div>
               </StepFrame>
             )}
 
             {step === 'equipment' && (
-              <StepFrame q="What do you have to train with?" hint="Bodyweight is always assumed.">
+              <StepFrame q={tr.t('onboarding.equipmentQ')} hint={tr.t('onboarding.equipmentHint')}>
                 <div className="space-y-5">
                   <div className="flex gap-2">
                     {(['gym', 'home', 'both'] as const).map((t) => (
                       <Chip key={t} selected={d.trainsAt === t} onClick={() => patch({ trainsAt: t, equipment: t === 'gym' ? ['barbell', 'dumbbell', 'cable', 'machine', 'bench', 'pullup_bar', 'cardio_machine'] : t === 'home' ? ['dumbbell', 'band'] : d.equipment })}>
-                        {t === 'gym' ? 'Gym' : t === 'home' ? 'Home' : 'Both'}
+                        {tr.t(`trainsAt.${t}`)}
                       </Chip>
                     ))}
                   </div>
@@ -317,7 +321,7 @@ export function OnboardingScreen() {
                       const on = d.equipment.includes(e)
                       return (
                         <Chip key={e} selected={on} onClick={() => patch({ equipment: on ? d.equipment.filter((x) => x !== e) : [...d.equipment, e] })}>
-                          {EQUIPMENT_LABELS[e]}
+                          {equipmentLabel(e)}
                         </Chip>
                       )
                     })}
@@ -327,23 +331,23 @@ export function OnboardingScreen() {
             )}
 
             {step === 'nutrition' && (
-              <StepFrame q="How do you eat?" hint="I will build meals around this. You can always tell me more later.">
+              <StepFrame q={tr.t('onboarding.nutritionQ')} hint={tr.t('onboarding.nutritionHint')}>
                 <div className="space-y-5">
                   <div className="flex flex-wrap gap-2">
-                    {(Object.keys(DIET_LABELS) as DietPreference[]).map((k) => (
+                    {DIETS.map((k) => (
                       <Chip key={k} selected={d.diet === k} onClick={() => patch({ diet: k })}>
-                        {DIET_LABELS[k]}
+                        {dietLabel(k)}
                       </Chip>
                     ))}
                   </div>
                   <div>
-                    <div className="label mb-2">Also</div>
+                    <div className="label mb-2">{tr.t('onboarding.also')}</div>
                     <div className="flex flex-wrap gap-2">
-                      {(Object.keys(DIETARY_FLAG_LABELS) as DietaryFlag[]).map((f) => {
+                      {DIETARY_FLAGS.map((f) => {
                         const on = d.flags.includes(f)
                         return (
                           <Chip key={f} size="sm" selected={on} onClick={() => patch({ flags: on ? d.flags.filter((x) => x !== f) : [...d.flags, f] })}>
-                            {DIETARY_FLAG_LABELS[f]}
+                            {dietaryFlagLabel(f)}
                           </Chip>
                         )
                       })}
@@ -354,8 +358,8 @@ export function OnboardingScreen() {
             )}
 
             {step === 'coachName' && (
-              <StepFrame q="What should I call your coach?" hint="No face, no avatar. Just a name and a voice you will get to know.">
-                <TextInput autoFocus value={d.coachName} onChange={(e) => patch({ coachName: e.target.value })} placeholder="Coach name" maxLength={20} onKeyDown={(e) => e.key === 'Enter' && canContinue && go(1)} />
+              <StepFrame q={tr.t('onboarding.coachNameQ')} hint={tr.t('onboarding.coachNameHint')}>
+                <TextInput autoFocus value={d.coachName} onChange={(e) => patch({ coachName: e.target.value })} placeholder={tr.t('profile.coachName')} maxLength={20} onKeyDown={(e) => e.key === 'Enter' && canContinue && go(1)} />
                 <div className="flex flex-wrap gap-2 mt-4">
                   {COACH_NAMES.map((n) => (
                     <Chip key={n} size="sm" selected={d.coachName === n} onClick={() => patch({ coachName: n })}>
@@ -367,16 +371,16 @@ export function OnboardingScreen() {
             )}
 
             {step === 'personality' && (
-              <StepFrame q={`How should ${d.coachName.trim() || 'your coach'} talk to you?`} hint="These change how your coach actually speaks, not just a label.">
+              <StepFrame q={tr.t('onboarding.personalityQ', { name: d.coachName.trim() || tr.t('onboarding.yourCoach') })} hint={tr.t('onboarding.personalityHint')}>
                 <div className="space-y-5">
-                  <Slider label="Motivation" value={d.personality.motivation} onChange={(v) => patch({ personality: { ...d.personality, motivation: v } })} leftLabel="Calm" rightLabel="Intense" />
-                  <Slider label="Tone" value={d.personality.tone} onChange={(v) => patch({ personality: { ...d.personality, tone: v } })} leftLabel="Gentle" rightLabel="Direct" />
-                  <Slider label="Humor" value={d.personality.humor} onChange={(v) => patch({ personality: { ...d.personality, humor: v } })} leftLabel="Serious" rightLabel="Playful" />
-                  <Slider label="Communication" value={d.personality.communication} onChange={(v) => patch({ personality: { ...d.personality, communication: v } })} leftLabel="Concise" rightLabel="Detailed" />
+                  <Slider label={tr.t('profile.motivation')} value={d.personality.motivation} onChange={(v) => patch({ personality: { ...d.personality, motivation: v } })} leftLabel={tr.t('profile.calm')} rightLabel={tr.t('profile.intense')} />
+                  <Slider label={tr.t('profile.tone')} value={d.personality.tone} onChange={(v) => patch({ personality: { ...d.personality, tone: v } })} leftLabel={tr.t('profile.gentle')} rightLabel={tr.t('profile.direct')} />
+                  <Slider label={tr.t('profile.humor')} value={d.personality.humor} onChange={(v) => patch({ personality: { ...d.personality, humor: v } })} leftLabel={tr.t('profile.serious')} rightLabel={tr.t('profile.playful')} />
+                  <Slider label={tr.t('profile.communication')} value={d.personality.communication} onChange={(v) => patch({ personality: { ...d.personality, communication: v } })} leftLabel={tr.t('profile.concise')} rightLabel={tr.t('profile.detailed')} />
                   <div className="rounded-[18px] bg-surface border border-border p-4 flex gap-3">
                     <CoachMark size={22} className="mt-0.5" />
                     <p className="text-[14px] leading-relaxed text-text-2">
-                      <span className="text-text-3 text-[12px] block mb-1">{d.coachName.trim() || 'Coach'} would say</span>
+                      <span className="text-text-3 text-[12px] block mb-1">{tr.t('onboarding.wouldSay', { name: d.coachName.trim() || tr.t('profile.coach') })}</span>
                       {voicePreview}
                     </p>
                   </div>
@@ -387,10 +391,8 @@ export function OnboardingScreen() {
             {step === 'ready' && (
               <div className="flex-1 flex flex-col items-center justify-center text-center">
                 <CoachMark size={64} active />
-                <h2 className="display text-[32px] mt-8">Meet {d.coachName.trim()}</h2>
-                <p className="text-[15px] text-text-2 mt-3 max-w-[300px] text-pretty leading-relaxed">
-                  {d.coachName.trim()} knows your goal, your week and your setup. The rest gets learned as you go. Nothing leaves this device.
-                </p>
+                <h2 className="display text-[32px] mt-8">{tr.t('onboarding.meet', { name: d.coachName.trim() })}</h2>
+                <p className="text-[15px] text-text-2 mt-3 max-w-[300px] text-pretty leading-relaxed">{tr.t('onboarding.readyBody', { name: d.coachName.trim() })}</p>
               </div>
             )}
           </motion.div>
@@ -400,11 +402,11 @@ export function OnboardingScreen() {
           <div className="pt-4 pb-safe">
             {step === 'ready' ? (
               <Button variant="primary" size="lg" full onClick={finish} iconRight={<ArrowRight size={18} />}>
-                Start coaching
+                {tr.t('onboarding.startCoaching')}
               </Button>
             ) : (
               <Button variant="primary" size="lg" full disabled={!canContinue} onClick={() => go(1)} iconRight={<ArrowRight size={18} />}>
-                {step === 'secondary' && !d.secondary ? 'Skip' : 'Continue'}
+                {step === 'secondary' && !d.secondary ? tr.t('common.skip') : tr.t('common.continue')}
               </Button>
             )}
           </div>

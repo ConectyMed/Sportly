@@ -6,15 +6,16 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router'
 import { runNotificationSweep } from '@/coach/coachService'
 import { CoachMark } from '@/components/ui/Primitives'
 import { Toast } from '@/components/ui/Toast'
+import { useT } from '@/i18n/react'
 import { useIsDesktop } from '@/lib/hooks'
 import { cn, haptic } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
 
 const TABS = [
-  { to: '/', label: 'Home', icon: House },
-  { to: '/coach', label: 'Coach', icon: null },
-  { to: '/progress', label: 'Progress', icon: TrendingUp },
-  { to: '/profile', label: 'Profile', icon: User },
+  { to: '/', label: 'common.nav.home', icon: House },
+  { to: '/coach', label: 'common.nav.coach', icon: null },
+  { to: '/progress', label: 'common.nav.progress', icon: TrendingUp },
+  { to: '/profile', label: 'common.nav.profile', icon: User },
 ] as const
 
 function RouteFallback() {
@@ -35,6 +36,7 @@ function isActivePath(pathname: string, to: string): boolean {
 }
 
 export function AppShell() {
+  const tr = useT()
   const desktop = useIsDesktop()
   const location = useLocation()
   const reduce = useReducedMotion()
@@ -51,7 +53,7 @@ export function AppShell() {
   }, [])
 
   const nav = (
-    <nav className={cn(desktop ? 'flex flex-col gap-1' : 'flex justify-around items-stretch h-[58px]')} aria-label="Primary">
+    <nav className={cn(desktop ? 'flex flex-col gap-1' : 'flex justify-around items-stretch h-[58px]')} aria-label={tr.t('common.nav.primary')}>
       {TABS.map((t) => {
         const active = isActivePath(location.pathname, t.to)
         const Icon = t.icon
@@ -69,7 +71,7 @@ export function AppShell() {
             )}
           >
             {Icon ? <Icon size={desktop ? 18 : 22} strokeWidth={active ? 2.2 : 1.8} /> : <CoachMark size={desktop ? 20 : 24} active={active} />}
-            <span>{t.to === '/coach' ? (desktop ? coachName : 'Coach') : t.label}</span>
+            <span>{t.to === '/coach' && desktop ? coachName : tr.t(t.label)}</span>
             {!desktop && active && <motion.span layoutId="tab-dot" className="absolute -bottom-[1px] h-[3px] w-5 rounded-full bg-accent" transition={{ type: 'spring', stiffness: 500, damping: 40 }} />}
           </NavLink>
         )
@@ -86,13 +88,13 @@ export function AppShell() {
               <CoachMark size={26} />
               <div>
                 <div className="title text-[17px] leading-none">Sportly</div>
-                <div className="text-[11px] text-text-3 mt-1 tracking-wide">Your Coach Daily</div>
+                <div className="text-[11px] text-text-3 mt-1 tracking-wide">{tr.t('common.tagline')}</div>
               </div>
             </div>
             {nav}
             <button onClick={() => navigate('/notifications')} className="mt-4 flex items-center gap-3 h-11 px-3.5 rounded-[14px] text-[14px] font-medium text-text-2 hover:text-text hover:bg-surface w-full">
               <Bell size={18} />
-              <span>Notifications</span>
+              <span>{tr.t('common.notifications')}</span>
               {unread > 0 && <span className="ml-auto h-5 min-w-5 px-1.5 rounded-full bg-accent text-accent-ink text-[11px] font-bold flex items-center justify-center">{unread}</span>}
             </button>
           </aside>

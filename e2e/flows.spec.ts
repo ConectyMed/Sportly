@@ -242,7 +242,8 @@ test.describe('Flow 9 — theme', () => {
   test('dark / light / system across screens', async ({ page }) => {
     await loadDemo(page)
     await page.goto('/profile/appearance')
-    const themeTabs = page.getByRole('tablist').first()
+    // The first tablist is the language selector; the theme tablist comes second.
+    const themeTabs = page.getByRole('tablist').nth(1)
     await themeTabs.getByRole('tab', { name: 'Light' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await tab(page, '/').click()
@@ -250,9 +251,9 @@ test.describe('Flow 9 — theme', () => {
     await coachTab(page).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     await page.goto('/profile/appearance')
-    await page.getByRole('tablist').first().getByRole('tab', { name: 'System' }).click()
+    await page.getByRole('tablist').nth(1).getByRole('tab', { name: 'System' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', /dark|light/)
-    await page.getByRole('tablist').first().getByRole('tab', { name: 'Dark' }).click()
+    await page.getByRole('tablist').nth(1).getByRole('tab', { name: 'Dark' }).click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
     await page.reload()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
@@ -327,6 +328,8 @@ test.describe('Flow 11 — food scan', () => {
     await coachTab(page).click()
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
     await page.locator('input[type="file"][accept="image/*"]:not([capture])').setInputFiles({ name: 'plate.png', mimeType: 'image/png', buffer: png })
+    // The preview must be attached before the message goes out, otherwise the photo is not part of the turn.
+    await expect(page.getByRole('img', { name: 'plate.png' })).toBeVisible()
     await send(page, 'I ate this')
     await lastCoachMessage(page)
     await expect(page.getByText('can’t see photos on this device', { exact: false }).last()).toBeVisible()
@@ -419,5 +422,51 @@ test.describe('Flow 13 — AI provider seam', () => {
     await page.getByText('Local model (Ollama, LM Studio)').click()
     await page.getByRole('button', { name: 'Remove' }).click()
     await expect(page.getByTestId('coach-engine-status')).toContainText('Answering now: Built-in coach')
+  })
+})
+
+test.describe('Flow 14 — language', () => {
+  test('switch to French → every surface and the coach speak French → persists across reload → back to English', async ({ page }) => {
+    await loadDemo(page)
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+    await page.goto('/profile/appearance')
+    await page.getByRole('tab', { name: 'Français' }).click()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
+    await expect(page).toHaveTitle(/Sportly — Ton coach au quotidien/)
+    await expect(page.getByText('Thème', { exact: true })).toBeVisible()
+    // Home is French without a reload.
+    await tab(page, '/').click()
+    await expect(page.getByText('Forme du jour', { exact: false }).first()).toBeVisible()
+    // The coach understands French and answers in French.
+    await coachTab(page).click()
+    const box = page.getByRole('textbox', { name: 'Écris à ton coach' })
+    await box.fill('Je n’ai que 30 minutes')
+    await box.press('Enter')
+    await expect(box).toBeDisabled({ timeout: 10_000 }).catch(() => {})
+    await expect(box).toBeEnabled({ timeout: 15_000 })
+    await expect(page.getByText(/Séance du jour ajustée|C’est fait\. |Réduite à environ/).last()).toBeVisible()
+    await expect(page.getByText('Lance-la').first()).toBeVisible()
+    // A French reference is resolved through the same pipeline.
+    await box.fill('Déplace-la à vendredi')
+    await box.press('Enter')
+    await expect(box).toBeEnabled({ timeout: 15_000 })
+    await expect(page.getByText(/déplacée de .* à vendredi|Tu as maintenant deux séances|Je ne vois pas de séance prévue/).last()).toBeVisible()
+    // Persists across reload.
+    await page.reload()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'fr')
+    await expect(page.getByRole('textbox', { name: 'Écris à ton coach' })).toBeVisible()
+    await tab(page, '/').click()
+    await expect(page.getByText('Forme du jour', { exact: false }).first()).toBeVisible()
+    // Nutrition and progress screens are French too.
+    await page.goto('/nutrition')
+    await expect(page.getByText(/protéines/i).first()).toBeVisible()
+    await page.goto('/progress')
+    await expect(page.getByText(/Progrès|progression/i).first()).toBeVisible()
+    // Back to English: the same state, English copy.
+    await page.goto('/profile/appearance')
+    await page.getByRole('tab', { name: 'English' }).click()
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en')
+    await tab(page, '/').click()
+    await expect(page.getByText('Readiness', { exact: false }).first()).toBeVisible()
   })
 })

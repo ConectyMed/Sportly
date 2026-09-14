@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { t } from '@/i18n'
 import { useStore } from '@/store/useStore'
 
 export function resolveTheme(pref: 'dark' | 'light' | 'system'): 'dark' | 'light' {
@@ -33,4 +34,15 @@ export function useReducedMotionPref(): void {
     else root.style.removeProperty('--motion-off')
     root.classList.toggle('reduce-motion', pref === 'on')
   }, [pref])
+}
+
+/** Keeps <html lang> and the document title in the user's language (the PWA shell follows the store). */
+export function useLanguageSync(): void {
+  const language = useStore((s) => s.preferences.language)
+  useEffect(() => {
+    document.documentElement.lang = language
+    document.title = t('common.appTitle', undefined, language)
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="description"]')
+    if (meta) meta.content = t('common.appDescription', undefined, language)
+  }, [language])
 }

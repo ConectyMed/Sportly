@@ -1,5 +1,7 @@
 import type { Attachment, Conversation } from '@/domain/types'
 import { getKnowledge } from '@/knowledge'
+import { LANGUAGE_NAMES, LOCALES } from '@/i18n'
+import type { Language } from '@/i18n/types'
 import { formatMinutes } from '@/lib/utils'
 import type { AppState } from '@/store/useStore'
 import { buildContextSnapshot, type CoachContextSnapshot } from '../context'
@@ -29,11 +31,18 @@ const RELEVANT_MEMORY = 6
 const KNOWLEDGE_HITS = 3
 
 /** The house rules. Provider-neutral: the same text goes to any model. */
+/** The one line every model receives about language. English text so it reads the same for every provider. */
+export function languageInstruction(code: Language): string {
+  return `Respond in ${LANGUAGE_NAMES[code]} (${LOCALES[code]}), the user's selected language, regardless of the language of their message. Use natural, idiomatic ${LANGUAGE_NAMES[code]}${code === 'fr' ? ' with tutoiement and correct accents' : ''}; keep units (kg, kcal, g) as they are.`
+}
+
 export function buildSystemPrompt(snapshot: CoachContextSnapshot, coach: AppState['coach']): string {
   const p = snapshot.profile
+  const lang = snapshot.language.code
   return [
     `You are ${coach.name}, the user's personal coach inside Sportly ("Your Coach Daily"). Text-first, warm, precise. You are not a medical professional: never diagnose; for pain, injury or symptoms recommend professional evaluation. Never encourage dangerous dieting or unsafe training.`,
-    `Personality: ${describePersonality(coach.personality)}. Match it in tone and length. Keep replies under 90 words unless the personality is detailed.`,
+    languageInstruction(lang),
+    `Personality: ${describePersonality(coach.personality, 'en')}. Match it in tone and length. Keep replies under 90 words unless the personality is detailed.`,
     `The user: ${p.name}, ${p.age}, ${p.weightKg} kg, level ${p.level}, trains ${p.availability.daysPerWeek}x/week for ${formatMinutes(p.availability.sessionMinutes)}.`,
     'How this works:',
     '- The CONTEXT is the truth about the user right now (weight, meals, workouts, goals, calendar, progress). Reason over it; do not restate it from memory. Use read tools for anything not in it.',
@@ -81,7 +90,8 @@ export function buildModelInput(state: AppState, conversation: Conversation | un
   const history = (conversation ? (state.messages[conversation.id] ?? []) : []).filter((m) => m.role !== 'system').slice(-RECENT_MESSAGES)
   return {
     system: buildSystemPrompt(snapshot, state.coach),
-    persona: { name: state.coach.name, personality: state.coach.personality, description: describePersonality(state.coach.personality) },
+    persona: { name: state.coach.name, personality: state.coach.personality, description: describePersonality(state.coach.personality, 'en') },
+    language: { ...snapshot.language, instruction: languageInstruction(snapshot.language.code) },
     context: {
       current: compactSnapshot(snapshot),
       relevant: { memory: relevantMemory(state, req.text, now), knowledge: relevantKnowledge(req.text) },

@@ -1,5 +1,6 @@
 import { motion, useReducedMotion } from 'motion/react'
 import { useId, useMemo, useState } from 'react'
+import { useT } from '@/i18n/react'
 import { cn } from '@/lib/utils'
 
 /* Elegant, dependency-free SVG charts tuned for small screens. */
@@ -44,6 +45,7 @@ export function LineChart({
   yMinPad?: number
 }) {
   const id = useId()
+  const tr = useT()
   const reduce = useReducedMotion()
   const [hover, setHover] = useState<number | null>(null)
   const w = 320
@@ -84,7 +86,7 @@ export function LineChart({
     <div className={cn('relative w-full', className)}>
       {target !== undefined && !targetInRange && (
         <div className="absolute right-0 top-0 text-[11px] text-text-3 pointer-events-none">
-          Goal {formatValue(target)} {target > max ? '↑' : '↓'}
+          {tr.t('home.goal', { value: formatValue(target) })} {target > max ? '↑' : '↓'}
         </div>
       )}
       <svg
@@ -121,7 +123,7 @@ export function LineChart({
           <>
             <line x1={padX} x2={w - padX} y1={targetY} y2={targetY} stroke="var(--text-4)" strokeDasharray="3 4" strokeWidth={1} />
             <text x={w - padX} y={targetY - 5} textAnchor="end" fontSize={10} fill="var(--text-3)">
-              Goal {formatValue(target!)}
+              {tr.t('home.goal', { value: formatValue(target!) })}
             </text>
           </>
         )}

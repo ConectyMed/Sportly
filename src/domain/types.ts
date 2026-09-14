@@ -393,7 +393,10 @@ export type WorkoutFocus =
 
 export interface Workout {
   id: string
+  /** English canonical title (stable label). Screens render workoutTitle(), which derives the localised title from `titleKey`. */
   title: string
+  /** Structured title (`focus:upper:express`, `recovery_flow`…), language-independent. */
+  titleKey?: string
   focus: WorkoutFocus
   estimatedMinutes: number
   exercises: WorkoutExercise[]
@@ -404,7 +407,10 @@ export interface Workout {
   programWeek?: number
   programDay?: number
   constraints?: WorkoutConstraints
+  /** Stored note text (English canonical or free text). */
   coachNote?: string
+  /** Structured note (`light`, `hard`, or a program phase), rendered in the user's language. */
+  noteKey?: string
   createdAt: ISODate
   startedAt?: ISODate
   completedAt?: ISODate
@@ -470,7 +476,10 @@ export interface Program {
 export interface Meal {
   id: string
   slot: 'breakfast' | 'lunch' | 'dinner' | 'snack' | 'pre_workout' | 'post_workout'
+  /** English canonical name; screens render mealTemplateName() from `templateId`. */
   name: string
+  /** Language-independent template id (`chicken_rice_bowl`, `restaurant`…). */
+  templateId?: string
   items: string[]
   calories: number
   proteinG: number
@@ -489,8 +498,11 @@ export interface NutritionPlan {
   fatG: number
   meals: Meal[]
   isTrainingDay: boolean
+  /** English canonical explanation; screens render nutritionRationale() from `rationaleKey`. */
   rationale: string
+  rationaleKey?: string
   adjustments?: string[]
+  adjustmentKeys?: string[]
   createdAt: ISODate
 }
 
@@ -603,8 +615,16 @@ export interface NotificationPreferences {
   quietHours: { start: string; end: string }
 }
 
+/** Languages the product speaks. Adding one means adding a dictionary, never new application logic. */
+export type Language = 'en' | 'fr'
+
 export interface Preferences {
   theme: 'dark' | 'light' | 'system'
+  /**
+   * The user's selected language. Authoritative: the UI, the built-in coach and
+   * any connected model all speak this language, whatever the last message was written in.
+   */
+  language: Language
   units: 'metric' | 'imperial'
   reducedMotion: 'system' | 'on' | 'off'
   hapticFeedback: boolean

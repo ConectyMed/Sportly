@@ -1,4 +1,5 @@
 import type { ActionRecord, Attachment, CoachPersonality, DomainChange, EntityRef, ExpectSlot } from '@/domain/types'
+import type { Language } from '@/i18n/types'
 import type { CoachContextSnapshot } from '../context'
 import type { ToolErrorCode } from '../tools/contracts'
 import type { JsonSchema } from './schema'
@@ -70,6 +71,8 @@ export interface CoachModelInput {
   /** Instructions: who the coach is, the rules of the house, how to use tools. */
   system: string
   persona: { name: string; personality: CoachPersonality; description: string }
+  /** The user's selected language. The model must answer in it, whatever the language of the message. */
+  language: { code: Language; name: string; locale: string; instruction: string }
   context: {
     /** CURRENT: the structured state right now (rebuilt every step). */
     current: CoachContextSnapshot

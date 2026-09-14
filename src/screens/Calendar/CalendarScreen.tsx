@@ -7,14 +7,18 @@ import { Card, SectionLabel } from '@/components/ui/Card'
 import { Chip, Tag } from '@/components/ui/Chip'
 import { EmptyState } from '@/components/ui/Primitives'
 import { Sheet } from '@/components/ui/Sheet'
+import { workoutTitle } from '@/domain/labels'
 import type { CalendarEvent } from '@/domain/types'
-import { addDays, dayKey, daysInMonth, formatDate, fromDayKey, monthName, startOfMonth, todayKey, weekdayName, WEEKDAY_SHORT } from '@/lib/dates'
+import { capitalizeFirst, weekdayInitials } from '@/i18n'
+import { useT } from '@/i18n/react'
+import { addDays, dayKey, daysInMonth, formatDate, fromDayKey, monthName, startOfMonth, todayKey, weekdayName } from '@/lib/dates'
 import { cn, formatMinutes } from '@/lib/utils'
 import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
 export function CalendarScreen() {
   const navigate = useNavigate()
+  const tr = useT()
   const events = useStore((s) => s.events)
   const workouts = useStore((s) => s.workouts)
   const coachName = useStore((s) => s.coach.name)
@@ -55,24 +59,28 @@ export function CalendarScreen() {
   }, [events, month])
 
   const ask = (p: string) => navigate(`/coach?prompt=${encodeURIComponent(p)}`)
+  const eventTitle = (e: CalendarEvent) => {
+    const w = e.workoutId ? workouts[e.workoutId] : undefined
+    return w ? workoutTitle(w) : e.title
+  }
 
   return (
-    <Page back="/" title="Calendar" eyebrow={`${monthStats.done} done · ${monthStats.planned} planned`}>
+    <Page back="/" title={tr.t('calendar.title')} eyebrow={tr.t('calendar.monthStats', { done: monthStats.done, planned: monthStats.planned })}>
       <Card padding="sm" className="mt-2">
         <div className="flex items-center justify-between px-1 mb-3">
-          <button aria-label="Previous month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} className="h-9 w-9 rounded-full flex items-center justify-center text-text-2 hover:bg-surface-2">
+          <button aria-label={tr.t('calendar.previousMonth')} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} className="h-9 w-9 rounded-full flex items-center justify-center text-text-2 hover:bg-surface-2">
             <ChevronLeft size={18} />
           </button>
           <div className="title text-[16px]">
-            {monthName(month)} {month.getFullYear()}
+            {capitalizeFirst(monthName(month))} {month.getFullYear()}
           </div>
-          <button aria-label="Next month" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} className="h-9 w-9 rounded-full flex items-center justify-center text-text-2 hover:bg-surface-2">
+          <button aria-label={tr.t('calendar.nextMonth')} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} className="h-9 w-9 rounded-full flex items-center justify-center text-text-2 hover:bg-surface-2">
             <ChevronRight size={18} />
           </button>
         </div>
         <div className="grid grid-cols-7 text-center text-[11px] text-text-3 mb-1">
           {[1, 2, 3, 4, 5, 6, 0].map((d) => (
-            <div key={d}>{WEEKDAY_SHORT[d].slice(0, 2)}</div>
+            <div key={d}>{weekdayInitials(d)}</div>
           ))}
         </div>
         <div className="grid grid-cols-7 gap-y-1">
@@ -92,13 +100,19 @@ export function CalendarScreen() {
         </div>
       </Card>
 
-      <SectionLabel className="mt-5">{selected === today ? 'Today' : formatDate(fromDayKey(selected), { weekday: true })}</SectionLabel>
+      <SectionLabel className="mt-5">{selected === today ? tr.t('common.today') : formatDate(fromDayKey(selected), { weekday: true })}</SectionLabel>
       {dayEvents.length === 0 ? (
         <Card>
           <EmptyState
-            title={selected < today ? 'Nothing logged' : 'Rest day'}
-            body={selected < today ? 'No session on this day.' : `Ask ${coachName} to plan something here.`}
-            action={selected >= today ? <Chip tone="accent" onClick={() => ask(selected === today ? 'Build today’s workout' : `Plan a workout for ${weekdayName(fromDayKey(selected))}`)}>Plan a workout</Chip> : undefined}
+            title={selected < today ? tr.t('calendar.nothingLogged') : tr.t('calendar.restDay')}
+            body={selected < today ? tr.t('calendar.noSession') : tr.t('calendar.askToPlan', { name: coachName })}
+            action={
+              selected >= today ? (
+                <Chip tone="accent" onClick={() => ask(selected === today ? tr.t('calendar.prompt.buildToday') : tr.t('calendar.prompt.planFor', { weekday: weekdayName(fromDayKey(selected)) }))}>
+                  {tr.t('calendar.planAWorkout')}
+                </Chip>
+              ) : undefined
+            }
           />
         </Card>
       ) : (
@@ -110,13 +124,13 @@ export function CalendarScreen() {
                 <div className="flex items-center gap-3">
                   <span className={cn('h-9 w-9 rounded-full flex items-center justify-center shrink-0', e.status === 'completed' ? 'bg-accent text-accent-ink' : e.status === 'skipped' ? 'bg-warn-soft text-warn' : 'bg-surface-2 text-text-2')}>{e.status === 'completed' ? <Check size={16} strokeWidth={3} /> : e.status === 'skipped' ? <X size={16} /> : <Play size={14} fill="currentColor" />}</span>
                   <button onClick={() => w && navigate(`/workout/${w.id}`)} className="flex-1 min-w-0 text-left">
-                    <div className="text-[15px] font-semibold truncate">{e.title}</div>
+                    <div className="text-[15px] font-semibold truncate">{eventTitle(e)}</div>
                     <div className="text-[12.5px] text-text-3">
-                      {w ? `${formatMinutes(w.estimatedMinutes)} · ${w.exercises.length} exercises` : e.type}
-                      {e.movedFrom && ` · moved from ${weekdayName(fromDayKey(e.movedFrom), true)}`}
+                      {w ? tr.t('common.minutesExercises', { minutes: formatMinutes(w.estimatedMinutes), exercises: tr.tn('common.exercises', w.exercises.length) }) : tr.t(`calendar.eventType.${e.type}`)}
+                      {e.movedFrom && ` · ${tr.t('calendar.movedFrom', { day: weekdayName(fromDayKey(e.movedFrom), true) })}`}
                     </div>
                   </button>
-                  {e.programId && <Tag tone="accent">Program</Tag>}
+                  {e.programId && <Tag tone="accent">{tr.t('common.program')}</Tag>}
                 </div>
                 {e.status === 'planned' && (
                   <div className="flex gap-2 mt-3 pt-3 border-t border-hairline">
@@ -130,11 +144,11 @@ export function CalendarScreen() {
                           navigate(`/workout/${w.id}/session`)
                         }}
                       >
-                        Start
+                        {tr.t('common.start')}
                       </Button>
                     )}
                     <Button size="sm" variant="secondary" icon={<MoveRight size={14} />} onClick={() => setMoving(e)}>
-                      Move
+                      {tr.t('common.move')}
                     </Button>
                     <Button
                       size="sm"
@@ -143,7 +157,7 @@ export function CalendarScreen() {
                         if (w) skipWorkout(w.id)
                       }}
                     >
-                      Skip
+                      {tr.t('common.skip')}
                     </Button>
                   </div>
                 )}
@@ -153,14 +167,14 @@ export function CalendarScreen() {
         </div>
       )}
 
-      <SectionLabel className="mt-6">Plan with {coachName}</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('calendar.planWith', { name: coachName })}</SectionLabel>
       <div className="flex flex-wrap gap-2 pb-4">
-        <Chip onClick={() => ask('Plan my week')}>Plan my week</Chip>
-        <Chip onClick={() => ask('Move Monday to Wednesday')}>Move Monday → Wednesday</Chip>
-        <Chip onClick={() => ask('Create me a 12-week program')}>12-week program</Chip>
+        <Chip onClick={() => ask(tr.t('calendar.prompt.planWeek'))}>{tr.t('calendar.chip.planWeek')}</Chip>
+        <Chip onClick={() => ask(tr.t('calendar.prompt.moveMonWed'))}>{tr.t('calendar.chip.moveMonWed')}</Chip>
+        <Chip onClick={() => ask(tr.t('calendar.prompt.program12'))}>{tr.t('calendar.chip.program12')}</Chip>
       </div>
 
-      <Sheet open={Boolean(moving)} onClose={() => setMoving(null)} title={moving ? `Move ${moving.title}` : 'Move'}>
+      <Sheet open={Boolean(moving)} onClose={() => setMoving(null)} title={moving ? tr.t('calendar.moveTitle', { title: eventTitle(moving) }) : tr.t('common.move')}>
         <div className="space-y-1.5 pb-2">
           {Array.from({ length: 7 }, (_, i) => addDays(fromDayKey(moving?.date ?? today), i - 3))
             .filter((d) => dayKey(d) !== moving?.date && dayKey(d) >= today)
@@ -174,12 +188,12 @@ export function CalendarScreen() {
                     const moved = moving ? moveEvent(moving.id, key) : undefined
                     setSelected(key)
                     setMoving(null)
-                    if (moved) useStore.getState().toast(moved.ok ? `Moved to ${weekdayName(d)}` : moved.summary, moved.ok ? 'success' : 'error')
+                    if (moved) useStore.getState().toast(moved.ok ? tr.t('calendar.movedTo', { day: weekdayName(d) }) : moved.summary, moved.ok ? 'success' : 'error')
                   }}
                   className="w-full flex items-center justify-between rounded-[14px] bg-surface border border-border px-4 py-3 hover:border-border-strong text-left"
                 >
-                  <span className="text-[15px] font-medium">{key === today ? 'Today' : formatDate(d, { weekday: true })}</span>
-                  {clash && <span className="text-[11px] text-warn">has a session</span>}
+                  <span className="text-[15px] font-medium">{key === today ? tr.t('common.today') : formatDate(d, { weekday: true })}</span>
+                  {clash && <span className="text-[11px] text-warn">{tr.t('calendar.hasSession')}</span>}
                 </button>
               )
             })}

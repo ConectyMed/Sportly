@@ -20,6 +20,7 @@ import type {
   UserProfile,
   Workout,
 } from '@/domain/types'
+import type { Language } from '@/i18n/types'
 import type { DailyNutrition } from '@/store/selectors'
 import type { CoachContextSnapshot } from './context'
 import type { FoodAnalysis } from './food/foodAnalysis'
@@ -33,6 +34,8 @@ import type { TemporalContext } from './time'
  */
 export interface CoachContext {
   now: Date
+  /** The user's selected language: every reply, chip and card is produced in it. */
+  language: Language
   /** What today, tomorrow and this week mean for this turn. */
   time: TemporalContext
   /** Serialisable structured view of the same state (what a model receives). */

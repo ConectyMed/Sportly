@@ -1,6 +1,10 @@
 import { generateWorkout, workoutVolume } from '@/coach/workoutGenerator'
 import { analyzeDescription, buildMeal } from '@/coach/food/foodAnalysis'
 import { generateNutritionPlan } from '@/coach/nutritionGenerator'
+import { workoutTitle } from '@/domain/labels'
+import { t, tn } from '@/i18n'
+import { foodItemName, mealDisplayName } from '@/coach/food/foodAnalysis'
+import { formatMinutes } from '@/lib/utils'
 import type { SeedPayload } from '@/store/useStore'
 import { addDays, dayKey, startOfWeek, todayKey } from '@/lib/dates'
 import { hashString, round, uid } from '@/lib/utils'
@@ -9,6 +13,8 @@ import type { AppNotification, CalendarEvent, Conversation, DailyCheckIn, Goal, 
 /**
  * Fictional demo user. Everything here is invented and generated deterministically
  * relative to "today" so the app always launches with a living history.
+ * Domain data (workouts, foods, goals) is language-independent; the memories,
+ * conversations and notifications are written in the user's language at seed time.
  */
 export function buildDemoSeed(): SeedPayload {
   const now = new Date()
@@ -60,21 +66,21 @@ export function buildDemoSeed(): SeedPayload {
     createdAt: addDays(now, -daysAgo).toISOString(),
   })
   const memory: MemoryItem[] = [
-    mem('goal', 'Primary goal is building muscle; wants to reach 77 kg lean', 77, 'onboarding'),
-    mem('goal', 'Secondary goal: better conditioning for climbing', 77, 'onboarding'),
-    mem('availability', 'Trains Monday, Tuesday, Thursday and Friday, usually around 7am before work', 77, 'onboarding'),
-    mem('equipment', 'Full commercial gym; prefers free weights over machines', 70),
-    mem('preference', 'Dislikes long steady-state cardio; likes bike intervals', 61),
-    mem('nutrition', 'Eats everything, but no mushrooms', 77, 'onboarding'),
-    mem('nutrition', 'Struggles to hit protein on busy days; shakes help', 40),
-    mem('health', 'Mild left shoulder tightness on overhead pressing in spring; fine since switching to dumbbells', 48),
-    mem('habit', 'Sleeps ~7h on weeknights, less before early flights', 33),
-    mem('reaction', 'Enjoys Bulgarian split squats far more than lunges', 26),
-    mem('history', 'Ran an 8-week upper/lower block in spring; bench went from 70 to 80 kg', 55),
-    mem('communication', 'Prefers short answers with one clear next step', 60),
-    mem('habit', 'Climbs on Saturday afternoons; keep Saturday legs light', 20),
-    mem('preference', 'Never wants burpees in a session', 15),
-    mem('nutrition', 'Usual training-day breakfast is oats, banana and a whey shake', 12, 'inferred'),
+    mem('goal', t('demo.mem.goalPrimary'), 77, 'onboarding'),
+    mem('goal', t('demo.mem.goalSecondary'), 77, 'onboarding'),
+    mem('availability', t('demo.mem.availability'), 77, 'onboarding'),
+    mem('equipment', t('demo.mem.equipment'), 70),
+    mem('preference', t('demo.mem.cardio'), 61),
+    mem('nutrition', t('demo.mem.mushrooms'), 77, 'onboarding'),
+    mem('nutrition', t('demo.mem.protein'), 40),
+    mem('health', t('demo.mem.shoulder'), 48),
+    mem('habit', t('demo.mem.sleep'), 33),
+    mem('reaction', t('demo.mem.splitSquats'), 26),
+    mem('history', t('demo.mem.block'), 55),
+    mem('communication', t('demo.mem.communication'), 60),
+    mem('habit', t('demo.mem.climbing'), 20),
+    mem('preference', t('demo.mem.burpees'), 15),
+    mem('nutrition', t('demo.mem.breakfast'), 12, 'inferred'),
   ]
 
   // ---- Training history: ~10 weeks, upper/lower, 4x/week with a few realistic misses.
@@ -253,55 +259,55 @@ export function buildDemoSeed(): SeedPayload {
     return c
   }
 
-  conv('Today', 0, { topic: 'workout', lastWorkoutId: todayWorkout?.id }, [
-    ['coach', 'Morning, Alex. 7.6 hours of sleep and low soreness: readiness is looking good today.'],
-    ['user', 'What should I do today?'],
+  const wTitle = todayWorkout ? workoutTitle(todayWorkout) : ''
+  conv(t('demo.conv.today'), 0, { topic: 'workout', lastWorkoutId: todayWorkout?.id }, [
+    ['coach', t('demo.conv.todayHello')],
+    ['user', t('demo.conv.todayAsk')],
     [
       'coach',
-      todayWorkout
-        ? `Today is ${todayWorkout.title}: about ${todayWorkout.estimatedMinutes} min, ${todayWorkout.exercises.length} exercises. You are recovering well, so there is room to push the first two compounds.`
-        : 'Today is a planned rest day: two sessions in the last 48 hours, and Monday is Upper Body. A walk and good food will do more than a session. If you want to move, I can build something light.',
+      todayWorkout ? t('demo.conv.todayWorkout', { title: wTitle, minutes: formatMinutes(todayWorkout.estimatedMinutes), exercises: tn('common.exercises', todayWorkout.exercises.length) }) : t('demo.conv.todayRest'),
       {
-        cards: todayWorkout ? [{ id: uid('card'), type: 'workout', refId: todayWorkout.id, title: todayWorkout.title, subtitle: `${todayWorkout.estimatedMinutes} min · ${todayWorkout.exercises.length} exercises` }] : undefined,
-        suggestions: todayWorkout ? ['Start it', 'Make it shorter', 'What should I eat?'] : ['Build today’s workout', 'Give me a light session', 'What should I eat?'],
+        cards: todayWorkout ? [{ id: uid('card'), type: 'workout', refId: todayWorkout.id, title: wTitle, subtitle: t('coach.card.workoutSubtitle', { minutes: formatMinutes(todayWorkout.estimatedMinutes), exercises: tn('common.exercises', todayWorkout.exercises.length) }) }] : undefined,
+        suggestions: todayWorkout ? [t('coach.sug.startIt'), t('coach.sug.makeShorter'), t('coach.sug.whatEat')] : [t('coach.sug.buildToday'), t('demo.conv.lightSession'), t('coach.sug.whatEat')],
       },
     ],
   ])
 
   if (scannedMeal) {
-    conv('Lunch scan', 2, { topic: 'nutrition', lastMealId: scannedMeal.id }, [
-      ['user', 'I ate this: chicken burrito bowl with rice, black beans and avocado'],
+    const mealName = mealDisplayName(scannedMeal)
+    conv(t('demo.conv.lunchScan'), 2, { topic: 'nutrition', lastMealId: scannedMeal.id }, [
+      ['user', t('demo.conv.lunchAte')],
       [
         'coach',
-        `From your description I count: ${scannedMeal.items.map((i) => i.name.toLowerCase()).join(', ')}. Estimated ${scannedMeal.calories} kcal and ${scannedMeal.proteinG} g protein. Portion sizes are the main uncertainty, so correct anything before I add it.`,
-        { cards: [{ id: uid('card'), type: 'food', refId: scannedMeal.id, title: scannedMeal.name, subtitle: `${scannedMeal.calories} kcal · ${scannedMeal.proteinG} g protein` }], suggestions: ['There was more rice', 'Add it to lunch'] },
+        t('demo.conv.lunchCount', { items: scannedMeal.items.map((i) => foodItemName(i).toLowerCase()).join(', '), kcal: scannedMeal.calories, protein: scannedMeal.proteinG }),
+        { cards: [{ id: uid('card'), type: 'food', refId: scannedMeal.id, title: mealName, subtitle: t('coach.card.foodSubtitle', { kcal: scannedMeal.calories, protein: scannedMeal.proteinG }) }], suggestions: [t('coach.sug.moreRice'), t('coach.sug.addItTo', { slot: t('coach.slotTo.lunch') })] },
       ],
-      ['user', 'Add it to lunch'],
-      ['coach', `Added to lunch: ${scannedMeal.name}. That leaves plenty of room for a protein-forward dinner.`, { suggestions: ['What should I eat tonight?', 'How much protein do I have left?'] }],
+      ['user', t('coach.sug.addItTo', { slot: t('coach.slotTo.lunch') })],
+      ['coach', t('demo.conv.lunchAdded', { meal: mealName }), { suggestions: [t('coach.sug.whatEatTonight'), t('coach.sug.proteinLeft')] }],
     ])
   }
 
-  conv('Restaurant tonight', 6, { topic: 'nutrition' }, [
-    ['user', 'I’m eating at a restaurant tonight'],
-    ['coach', 'No problem. I adjusted the rest of your day around it: lighter, protein-forward meals earlier so dinner has room. Order a protein main, add vegetables, and pick one indulgence you actually want.', { suggestions: ['What should I order?'] }],
-    ['user', 'Thanks'],
-    ['coach', 'Anytime. Enjoy it properly.'],
+  conv(t('demo.conv.restaurant'), 6, { topic: 'nutrition' }, [
+    ['user', t('coach.sug.restaurantTonight')],
+    ['coach', t('demo.conv.restaurantReply'), { suggestions: [t('coach.sug.whatOrder')] }],
+    ['user', t('demo.conv.thanks')],
+    ['coach', t('demo.conv.anytime')],
   ])
 
-  conv('Shoulder check', 48, { topic: 'recovery' }, [
-    ['user', 'My left shoulder feels tight on overhead press'],
-    ['coach', 'Got it. Mild shoulder discomfort: we work around it, not through it. I swapped Overhead Press for Dumbbell Shoulder Press and kept today lighter. If it sharpens, swells, or lasts more than a few days, see a physio.'],
-    ['user', 'Remember that dumbbells feel better for my shoulder'],
-    ['coach', 'Noted: “Dumbbells feel better for my shoulder.” I will factor that in from now on.'],
+  conv(t('demo.conv.shoulder'), 48, { topic: 'recovery' }, [
+    ['user', t('demo.conv.shoulderUser')],
+    ['coach', t('demo.conv.shoulderReply')],
+    ['user', t('demo.conv.shoulderRemember')],
+    ['coach', t('demo.conv.shoulderNoted')],
   ])
 
   // Sort: newest first.
   conversations.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
 
   const notifications: AppNotification[] = [
-    { id: uid('ntf'), kind: 'recovery', title: 'You’re recovering well today', body: 'We can push a little harder on the first two lifts.', createdAt: new Date(now.getTime() - 40 * 60_000).toISOString(), read: false, action: { label: 'Talk to Nova', to: '/coach' } },
-    { id: uid('ntf'), kind: 'insight', title: 'Four weeks consistent', body: 'You have hit your sessions four weeks in a row. This is where it compounds.', createdAt: addDays(now, -1).toISOString(), read: true, action: { label: 'See progress', to: '/progress' } },
-    { id: uid('ntf'), kind: 'plan_ready', title: 'Good morning. Your plan is ready.', body: todayWorkout ? `${todayWorkout.title}, about ${todayWorkout.estimatedMinutes} min.` : 'Tap to see today.', createdAt: new Date(now.getTime() - 3 * 3600_000).toISOString(), read: true, action: { label: 'See today', to: '/' } },
+    { id: uid('ntf'), kind: 'recovery', title: t('demo.ntf.recoveryTitle'), body: t('demo.ntf.recoveryBody'), createdAt: new Date(now.getTime() - 40 * 60_000).toISOString(), read: false, action: { label: t('demo.ntf.talkTo', { name: coach.name }), to: '/coach' } },
+    { id: uid('ntf'), kind: 'insight', title: t('demo.ntf.consistentTitle'), body: t('demo.ntf.consistentBody'), createdAt: addDays(now, -1).toISOString(), read: true, action: { label: t('demo.ntf.seeProgress'), to: '/progress' } },
+    { id: uid('ntf'), kind: 'plan_ready', title: t('demo.ntf.planTitle'), body: todayWorkout ? t('demo.ntf.planBody', { title: wTitle, minutes: formatMinutes(todayWorkout.estimatedMinutes) }) : t('demo.ntf.planBodyRest'), createdAt: new Date(now.getTime() - 3 * 3600_000).toISOString(), read: true, action: { label: t('demo.ntf.seeToday'), to: '/' } },
   ]
 
   const nutrition = generateNutritionPlan({ user, goals, isTrainingDay: Boolean(todayWorkout), seed: `${today}-${userId}` })

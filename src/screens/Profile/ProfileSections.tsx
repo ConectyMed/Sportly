@@ -2,7 +2,7 @@ import { Pin, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { coachEngineStatus, requestPushPermission } from '@/coach/coachService'
-import { DEFAULT_LOCAL_LLM_URL, PROVIDER_LABELS, type ProviderId } from '@/coach/model'
+import { DEFAULT_LOCAL_LLM_URL, type ProviderId } from '@/coach/model'
 import { buildVoice, describePersonality } from '@/coach/personality'
 import { Page } from '@/components/layout/Page'
 import { Button } from '@/components/ui/Button'
@@ -13,10 +13,11 @@ import { Segmented } from '@/components/ui/Segmented'
 import { Sheet } from '@/components/ui/Sheet'
 import { Slider } from '@/components/ui/Slider'
 import { buildDemoSeed } from '@/domain/demo'
-import { EQUIPMENT_LABELS } from '@/domain/exercises'
-import { DIET_LABELS, DIETARY_FLAG_LABELS, LEVEL_LABELS } from '@/domain/labels'
-import type { CoachConfig, DietPreference, DietaryFlag, EquipmentId, FitnessLevel, MemoryCategory } from '@/domain/types'
-import { WEEKDAY_SHORT, relativeDay } from '@/lib/dates'
+import { DIETARY_FLAGS, DIETS, LEVELS, dietLabel, dietaryFlagLabel, equipmentLabel, levelLabel, memoryCategoryLabel } from '@/domain/labels'
+import type { CoachConfig, EquipmentId, MemoryCategory } from '@/domain/types'
+import { LANGUAGE_NAMES, weekdayInitials, type MessageKey } from '@/i18n'
+import { useT } from '@/i18n/react'
+import { relativeDay } from '@/lib/dates'
 import { cn, formatMinutes } from '@/lib/utils'
 import { userAction } from '@/coach/userActions'
 import { STORAGE_KEY, useStore } from '@/store/useStore'
@@ -61,52 +62,53 @@ function Row({ label, children, sub }: { label: string; children: React.ReactNod
 
 /* ------------------------------------------------------------------ Personal */
 function PersonalSection() {
+  const tr = useT()
   const user = useStore((s) => s.user)!
   const update = useStore((s) => s.updateUser)
   const addMeasurement = useStore((s) => s.addMeasurement)
   const navigate = useNavigate()
   return (
-    <Page back="/profile" title="Personal">
+    <Page back="/profile" title={tr.t('profile.personal')}>
       <Group className="mt-2">
         <div className="px-4 py-3">
-          <div className="text-[12.5px] text-text-3 mb-1.5">Name</div>
+          <div className="text-[12.5px] text-text-3 mb-1.5">{tr.t('profile.name')}</div>
           <TextInput value={user.name} onChange={(e) => update({ name: e.target.value })} maxLength={32} />
         </div>
-        <Row label="Age">
+        <Row label={tr.t('profile.age')}>
           <Stepper value={user.age} min={14} max={90} onChange={(v) => update({ age: v })} />
         </Row>
-        <Row label="Height">
-          <Stepper value={user.heightCm} min={120} max={230} unit="cm" onChange={(v) => update({ heightCm: v })} />
+        <Row label={tr.t('profile.height')}>
+          <Stepper value={user.heightCm} min={120} max={230} unit={tr.t('common.cm')} onChange={(v) => update({ heightCm: v })} />
         </Row>
-        <Row label="Weight" sub="Logs today’s weight too">
+        <Row label={tr.t('profile.weight')} sub={tr.t('profile.weightSub')}>
           <Stepper
             value={user.weightKg}
             min={35}
             max={250}
             step={0.5}
-            unit="kg"
-            format={(v) => v.toFixed(1)}
+            unit={tr.t('common.kg')}
+            format={(v) => tr.dec(v, 1)}
             onChange={(v) => {
               update({ weightKg: v })
               addMeasurement({ type: 'body_weight', value: v, unit: 'kg', date: new Date().toISOString().slice(0, 10), source: 'user' })
             }}
           />
         </Row>
-        <Row label="Lifestyle" sub="Outside of training">
+        <Row label={tr.t('profile.lifestyle')} sub={tr.t('profile.lifestyleSub')}>
           <div className="flex gap-1.5 flex-wrap justify-end">
             {(['sedentary', 'light', 'moderate', 'active'] as const).map((l) => (
               <Chip key={l} size="sm" selected={user.lifestyle === l} onClick={() => update({ lifestyle: l })}>
-                {l}
+                {tr.t(`lifestyle.${l}`)}
               </Chip>
             ))}
           </div>
         </Row>
-        <Row label="Typical sleep">
-          <Stepper value={user.sleepHoursTypical} min={4} max={10} step={0.5} unit="h" format={(v) => v.toFixed(1)} onChange={(v) => update({ sleepHoursTypical: v })} />
+        <Row label={tr.t('profile.typicalSleep')}>
+          <Stepper value={user.sleepHoursTypical} min={4} max={10} step={0.5} unit={tr.t('common.h')} format={(v) => tr.dec(v, 1)} onChange={(v) => update({ sleepHoursTypical: v })} />
         </Row>
       </Group>
       <Group className="mt-4">
-        <ListRow label="Goals" sub="Primary and secondary goals, targets" onClick={() => navigate('/goals')} />
+        <ListRow label={tr.t('profile.goals')} sub={tr.t('profile.goalsSub')} onClick={() => navigate('/goals')} />
       </Group>
     </Page>
   )
@@ -114,20 +116,21 @@ function PersonalSection() {
 
 /* ------------------------------------------------------------------ Training */
 function TrainingSection() {
+  const tr = useT()
   const user = useStore((s) => s.user)!
   const update = useStore((s) => s.updateUser)
   const EQUIPMENT_OPTIONS: EquipmentId[] = ['barbell', 'dumbbell', 'kettlebell', 'cable', 'machine', 'bench', 'pullup_bar', 'band', 'cardio_machine']
   return (
-    <Page back="/profile" title="Training">
-      <SectionLabel className="mt-3">Level</SectionLabel>
+    <Page back="/profile" title={tr.t('profile.training')}>
+      <SectionLabel className="mt-3">{tr.t('profile.level')}</SectionLabel>
       <div className="flex flex-wrap gap-2">
-        {(Object.keys(LEVEL_LABELS) as FitnessLevel[]).map((l) => (
+        {LEVELS.map((l) => (
           <Chip key={l} selected={user.level === l} onClick={() => update({ level: l })}>
-            {LEVEL_LABELS[l]}
+            {levelLabel(l)}
           </Chip>
         ))}
       </div>
-      <SectionLabel className="mt-6">Training days</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('profile.trainingDays')}</SectionLabel>
       <div className="flex justify-between">
         {[1, 2, 3, 4, 5, 6, 0].map((day) => {
           const on = user.availability.preferredDays.includes(day)
@@ -141,70 +144,71 @@ function TrainingSection() {
               }}
               className={cn('h-11 w-11 rounded-full text-[13px] font-semibold', on ? 'bg-accent text-accent-ink' : 'bg-surface text-text-2 border border-border')}
             >
-              {WEEKDAY_SHORT[day].slice(0, 2)}
+              {weekdayInitials(day, tr.lang)}
             </button>
           )
         })}
       </div>
       <div className="mt-5">
-        <Slider label="Session length" value={user.availability.sessionMinutes} min={20} max={90} step={5} onChange={(v) => update({ availability: { ...user.availability, sessionMinutes: v } })} format={(v) => formatMinutes(v)} leftLabel="20 min" rightLabel="90 min" />
+        <Slider label={tr.t('profile.sessionLength')} value={user.availability.sessionMinutes} min={20} max={90} step={5} onChange={(v) => update({ availability: { ...user.availability, sessionMinutes: v } })} format={(v) => formatMinutes(v)} leftLabel={`20 ${tr.t('common.min')}`} rightLabel={`90 ${tr.t('common.min')}`} />
       </div>
-      <SectionLabel className="mt-6">Where</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('profile.where')}</SectionLabel>
       <div className="flex gap-2">
         {(['gym', 'home', 'both'] as const).map((t) => (
           <Chip key={t} selected={user.trainsAt === t} onClick={() => update({ trainsAt: t })}>
-            {t === 'gym' ? 'Gym' : t === 'home' ? 'Home' : 'Both'}
+            {tr.t(`trainsAt.${t}`)}
           </Chip>
         ))}
       </div>
-      <SectionLabel className="mt-6">Equipment</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('profile.equipment')}</SectionLabel>
       <div className="flex flex-wrap gap-2 pb-4">
         {EQUIPMENT_OPTIONS.map((e) => {
           const on = user.equipment.includes(e)
           return (
             <Chip key={e} selected={on} onClick={() => update({ equipment: on ? user.equipment.filter((x) => x !== e) : [...user.equipment, e] })}>
-              {EQUIPMENT_LABELS[e]}
+              {equipmentLabel(e)}
             </Chip>
           )
         })}
       </div>
-      <p className="text-[12.5px] text-text-3">Bodyweight is always available. Your coach uses this to build every session.</p>
+      <p className="text-[12.5px] text-text-3">{tr.t('profile.equipmentNote')}</p>
     </Page>
   )
 }
 
 /* ------------------------------------------------------------------ Nutrition */
 function NutritionSection() {
+  const tr = useT()
   const user = useStore((s) => s.user)!
   const update = useStore((s) => s.updateUser)
   const [dislike, setDislike] = useState('')
   return (
-    <Page back="/profile" title="Nutrition">
-      <SectionLabel className="mt-3">Diet</SectionLabel>
+    <Page back="/profile" title={tr.t('profile.nutrition')}>
+      <SectionLabel className="mt-3">{tr.t('profile.diet')}</SectionLabel>
       <div className="flex flex-wrap gap-2">
-        {(Object.keys(DIET_LABELS) as DietPreference[]).map((k) => (
+        {DIETS.map((k) => (
           <Chip key={k} selected={user.diet === k} onClick={() => update({ diet: k })}>
-            {DIET_LABELS[k]}
+            {dietLabel(k)}
           </Chip>
         ))}
       </div>
-      <SectionLabel className="mt-6">Dietary preferences</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('profile.dietaryPreferences')}</SectionLabel>
       <div className="flex flex-wrap gap-2">
-        {(Object.keys(DIETARY_FLAG_LABELS) as DietaryFlag[]).map((f) => {
+        {DIETARY_FLAGS.map((f) => {
           const on = user.dietaryFlags.includes(f)
           return (
             <Chip key={f} selected={on} onClick={() => update({ dietaryFlags: on ? user.dietaryFlags.filter((x) => x !== f) : [...user.dietaryFlags, f] })}>
-              {DIETARY_FLAG_LABELS[f]}
+              {dietaryFlagLabel(f)}
             </Chip>
           )
         })}
       </div>
-      <SectionLabel className="mt-6">Foods to avoid</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('profile.foodsToAvoid')}</SectionLabel>
       <div className="flex gap-2">
         <TextInput
           value={dislike}
           onChange={(e) => setDislike(e.target.value)}
-          placeholder="e.g. Mushrooms"
+          placeholder={tr.t('profile.foodsToAvoidPlaceholder')}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && dislike.trim()) {
               update({ dislikedFoods: [...user.dislikedFoods, dislike.trim()] })
@@ -215,7 +219,7 @@ function NutritionSection() {
         <Button
           variant="secondary"
           size="icon"
-          aria-label="Add"
+          aria-label={tr.t('common.add')}
           onClick={() => {
             if (dislike.trim()) {
               update({ dislikedFoods: [...user.dislikedFoods, dislike.trim()] })
@@ -233,70 +237,74 @@ function NutritionSection() {
           </Chip>
         ))}
       </div>
-      <p className="text-[12.5px] text-text-3 mt-6">Targets are calculated from your goal, body and training day. Ask your coach to adjust them any time.</p>
+      <p className="text-[12.5px] text-text-3 mt-6">{tr.t('profile.nutritionNote')}</p>
     </Page>
   )
 }
 
 /* ------------------------------------------------------------------ Coach */
 function CoachSection() {
+  const tr = useT()
   const coach = useStore((s) => s.coach)
   const updateCoach = useStore((s) => s.updateCoach)
   const updatePersonality = useStore((s) => s.updatePersonality)
   const user = useStore((s) => s.user)!
   const [sheet, setSheet] = useState<Exclude<ProviderId, 'local'> | null>(null)
   const status = coachEngineStatus({ coach })
+  const providerLabel = (id: ProviderId) => tr.t(`profile.provider.${id}`)
   const preview = useMemo(() => {
-    const v = buildVoice(coach.personality)
+    const v = buildVoice(coach.personality, tr.lang)
     return v.compose({
-      core: `${user.name.split(' ')[0]}, today is lower body, about ${formatMinutes(user.availability.sessionMinutes)}.`,
-      reason: 'Your legs are fresh and it is next in your rotation.',
-      soft: 'If you are up for it,',
-      push: 'Let’s make it count.',
-      calm: 'Take it at your pace.',
-      quip: 'Your quads have entered the chat.',
-      extra: 'Loads are up 2.5 kg from last time because you completed every set.',
+      core: tr.t('profile.preview.core', { name: user.name.split(' ')[0], minutes: formatMinutes(user.availability.sessionMinutes, tr.lang) }),
+      reason: tr.t('profile.preview.reason'),
+      soft: tr.t('profile.preview.soft'),
+      push: tr.t('profile.preview.push'),
+      calm: tr.t('profile.preview.calm'),
+      quip: tr.t('profile.preview.quip'),
+      extra: tr.t('profile.preview.extra'),
     })
-  }, [coach.personality, user])
+  }, [coach.personality, user, tr])
+
+  const inUse = (base: string, active: boolean) => (active ? tr.t('profile.inUse', { base }) : base)
 
   return (
-    <Page back="/profile" title="Coach">
+    <Page back="/profile" title={tr.t('profile.coach')}>
       <div className="flex items-center gap-4 mt-3">
         <CoachMark size={44} active />
         <div className="flex-1">
-          <div className="text-[12.5px] text-text-3 mb-1">Coach name</div>
+          <div className="text-[12.5px] text-text-3 mb-1">{tr.t('profile.coachName')}</div>
           <TextInput value={coach.name} onChange={(e) => updateCoach({ name: e.target.value })} maxLength={20} />
         </div>
       </div>
 
-      <SectionLabel className="mt-7">Personality</SectionLabel>
+      <SectionLabel className="mt-7">{tr.t('profile.personality')}</SectionLabel>
       <Card>
         <div className="space-y-5">
-          <Slider label="Motivation" value={coach.personality.motivation} onChange={(v) => updatePersonality({ motivation: v })} leftLabel="Calm" rightLabel="Intense" />
-          <Slider label="Tone" value={coach.personality.tone} onChange={(v) => updatePersonality({ tone: v })} leftLabel="Gentle" rightLabel="Direct" />
-          <Slider label="Humor" value={coach.personality.humor} onChange={(v) => updatePersonality({ humor: v })} leftLabel="Serious" rightLabel="Playful" />
-          <Slider label="Communication" value={coach.personality.communication} onChange={(v) => updatePersonality({ communication: v })} leftLabel="Concise" rightLabel="Detailed" />
+          <Slider label={tr.t('profile.motivation')} value={coach.personality.motivation} onChange={(v) => updatePersonality({ motivation: v })} leftLabel={tr.t('profile.calm')} rightLabel={tr.t('profile.intense')} />
+          <Slider label={tr.t('profile.tone')} value={coach.personality.tone} onChange={(v) => updatePersonality({ tone: v })} leftLabel={tr.t('profile.gentle')} rightLabel={tr.t('profile.direct')} />
+          <Slider label={tr.t('profile.humor')} value={coach.personality.humor} onChange={(v) => updatePersonality({ humor: v })} leftLabel={tr.t('profile.serious')} rightLabel={tr.t('profile.playful')} />
+          <Slider label={tr.t('profile.communication')} value={coach.personality.communication} onChange={(v) => updatePersonality({ communication: v })} leftLabel={tr.t('profile.concise')} rightLabel={tr.t('profile.detailed')} />
         </div>
       </Card>
       <div className="mt-3 rounded-[18px] bg-surface border border-border p-4 flex gap-3">
         <CoachMark size={20} className="mt-0.5" />
         <div>
           <div className="text-[11.5px] text-text-3 mb-1">
-            {coach.name} · {describePersonality(coach.personality)}
+            {coach.name} · {describePersonality(coach.personality, tr.lang)}
           </div>
           <p className="text-[14px] leading-relaxed text-text-2">{preview}</p>
         </div>
       </div>
 
-      <SectionLabel className="mt-7">Intelligence</SectionLabel>
+      <SectionLabel className="mt-7">{tr.t('profile.intelligence')}</SectionLabel>
       <Group>
-        <ListRow label="Built-in coach" sub="Runs on this device. No account, no network." right={<Toggle checked={coach.provider === 'local'} onChange={() => updateCoach({ provider: 'local' })} label="Use built-in coach" />} />
-        <ListRow label="Claude (bring your own key)" sub={coach.anthropicApiKey ? `Key saved on this device${coach.provider === 'anthropic' ? ' · in use' : ''}` : 'Optional. Same tools, free-form conversation.'} onClick={() => setSheet('anthropic')} />
-        <ListRow label="OpenAI (bring your own key)" sub={coach.openaiApiKey ? `Key saved on this device${coach.provider === 'openai' ? ' · in use' : ''}` : 'Optional. Same tools, free-form conversation.'} onClick={() => setSheet('openai')} />
-        <ListRow label="Local model (Ollama, LM Studio)" sub={coach.localLlmModel ? `${coach.localLlmModel} at ${coach.localLlmUrl || DEFAULT_LOCAL_LLM_URL}${coach.provider === 'local_llm' ? ' · in use' : ''}` : 'Optional. An OpenAI-compatible endpoint on your machine.'} onClick={() => setSheet('local_llm')} />
+        <ListRow label={providerLabel('local')} sub={tr.t('profile.builtInSub')} right={<Toggle checked={coach.provider === 'local'} onChange={() => updateCoach({ provider: 'local' })} label={tr.t('profile.useBuiltIn')} />} />
+        <ListRow label={tr.t('profile.claudeRow')} sub={coach.anthropicApiKey ? inUse(tr.t('profile.keySaved'), coach.provider === 'anthropic') : tr.t('profile.providerOptional')} onClick={() => setSheet('anthropic')} />
+        <ListRow label={tr.t('profile.openaiRow')} sub={coach.openaiApiKey ? inUse(tr.t('profile.keySaved'), coach.provider === 'openai') : tr.t('profile.providerOptional')} onClick={() => setSheet('openai')} />
+        <ListRow label={tr.t('profile.localModelRow')} sub={coach.localLlmModel ? inUse(tr.t('profile.localModelAt', { model: coach.localLlmModel, url: coach.localLlmUrl || DEFAULT_LOCAL_LLM_URL }), coach.provider === 'local_llm') : tr.t('profile.localModelOptional')} onClick={() => setSheet('local_llm')} />
       </Group>
       <p className="text-[12px] text-text-3 mt-2" data-testid="coach-engine-status">
-        Answering now: {PROVIDER_LABELS[status.active]}.{status.reason ? ` ${status.reason}` : ''} Every engine acts through the same Sportly tools; a connected model falls back to the built-in coach if it is unavailable.
+        {tr.t('profile.answeringNow', { label: providerLabel(status.active) })}{status.reason ? ` ${status.reason}` : ''} {tr.t('profile.engineNote')}
       </p>
 
       <ProviderSheet which={sheet} coach={coach} onClose={() => setSheet(null)} onSave={(patch) => updateCoach(patch)} />
@@ -304,13 +312,14 @@ function CoachSection() {
   )
 }
 
-const PROVIDER_FIELDS: Record<Exclude<ProviderId, 'local'>, { title: string; intro: string; secret?: keyof CoachConfig; model: keyof CoachConfig; url?: keyof CoachConfig; modelPlaceholder: string; secretPlaceholder?: string }> = {
-  anthropic: { title: 'Connect Claude', intro: 'Paste an Anthropic API key. It is stored only in this browser and sent only to Anthropic.', secret: 'anthropicApiKey', model: 'anthropicModel', modelPlaceholder: 'claude-sonnet-5', secretPlaceholder: 'sk-ant-…' },
-  openai: { title: 'Connect OpenAI', intro: 'Paste an OpenAI API key. It is stored only in this browser and sent only to OpenAI.', secret: 'openaiApiKey', model: 'openaiModel', modelPlaceholder: 'gpt-4.1-mini', secretPlaceholder: 'sk-…' },
-  local_llm: { title: 'Connect a local model', intro: 'Point Sportly at an OpenAI-compatible endpoint running on your machine (Ollama, LM Studio). No key, no cloud.', model: 'localLlmModel', url: 'localLlmUrl', modelPlaceholder: 'llama3.1' },
+const PROVIDER_FIELDS: Record<Exclude<ProviderId, 'local'>, { title: MessageKey; intro: MessageKey; secret?: keyof CoachConfig; model: keyof CoachConfig; url?: keyof CoachConfig; modelPlaceholder: string; secretPlaceholder?: string }> = {
+  anthropic: { title: 'profile.connect.anthropic.title', intro: 'profile.connect.anthropic.intro', secret: 'anthropicApiKey', model: 'anthropicModel', modelPlaceholder: 'claude-sonnet-5', secretPlaceholder: 'sk-ant-…' },
+  openai: { title: 'profile.connect.openai.title', intro: 'profile.connect.openai.intro', secret: 'openaiApiKey', model: 'openaiModel', modelPlaceholder: 'gpt-4.1-mini', secretPlaceholder: 'sk-…' },
+  local_llm: { title: 'profile.connect.local_llm.title', intro: 'profile.connect.local_llm.intro', model: 'localLlmModel', url: 'localLlmUrl', modelPlaceholder: 'llama3.1' },
 }
 
 function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<ProviderId, 'local'> | null; coach: CoachConfig; onClose: () => void; onSave: (patch: Partial<CoachConfig>) => void }) {
+  const tr = useT()
   const f = which ? PROVIDER_FIELDS[which] : undefined
   const [secret, setSecret] = useState('')
   const [model, setModel] = useState('')
@@ -325,15 +334,16 @@ function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<Provi
   }
   const configured = which ? Boolean(f?.secret ? coach[f.secret] : coach[f!.model]) : false
   const canSave = f ? (f.secret ? secret.trim().length > 8 : model.trim().length > 0) : false
+  const label = which ? tr.t(`profile.provider.${which}`) : ''
   return (
-    <Sheet open={Boolean(which)} onClose={onClose} title={f?.title ?? ''}>
+    <Sheet open={Boolean(which)} onClose={onClose} title={f ? tr.t(f.title) : ''}>
       {f && which && (
         <>
-          <p className="text-[13.5px] text-text-2 mb-3">{f.intro}</p>
+          <p className="text-[13.5px] text-text-2 mb-3">{tr.t(f.intro)}</p>
           <div className="space-y-2.5">
-            {f.secret && <TextInput value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={f.secretPlaceholder} type="password" autoComplete="off" aria-label="API key" />}
-            {f.url && <TextInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder={DEFAULT_LOCAL_LLM_URL} autoComplete="off" aria-label="Endpoint URL" />}
-            <TextInput value={model} onChange={(e) => setModel(e.target.value)} placeholder={`Model, e.g. ${f.modelPlaceholder}`} autoComplete="off" aria-label="Model name" />
+            {f.secret && <TextInput value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={f.secretPlaceholder} type="password" autoComplete="off" aria-label={tr.t('profile.apiKey')} />}
+            {f.url && <TextInput value={url} onChange={(e) => setUrl(e.target.value)} placeholder={DEFAULT_LOCAL_LLM_URL} autoComplete="off" aria-label={tr.t('profile.endpointUrl')} />}
+            <TextInput value={model} onChange={(e) => setModel(e.target.value)} placeholder={tr.t('profile.modelPlaceholder', { example: f.modelPlaceholder })} autoComplete="off" aria-label={tr.t('profile.modelName')} />
           </div>
           <div className="flex gap-2 mt-4 pb-2">
             {configured && (
@@ -348,7 +358,7 @@ function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<Provi
                   onClose()
                 }}
               >
-                Remove
+                {tr.t('common.remove')}
               </Button>
             )}
             <Button
@@ -362,10 +372,10 @@ function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<Provi
                 if (f.url) patch[f.url] = (url.trim() || DEFAULT_LOCAL_LLM_URL) as never
                 onSave(patch)
                 onClose()
-                useStore.getState().toast(`${PROVIDER_LABELS[which]} connected`, 'success')
+                useStore.getState().toast(tr.t('profile.connected', { label }), 'success')
               }}
             >
-              Save and use {PROVIDER_LABELS[which]}
+              {tr.t('profile.saveAndUse', { label })}
             </Button>
           </div>
         </>
@@ -375,21 +385,8 @@ function ProviderSheet({ which, coach, onClose, onSave }: { which: Exclude<Provi
 }
 
 /* ------------------------------------------------------------------ Memory */
-const CATEGORY_LABELS: Record<MemoryCategory, string> = {
-  goal: 'Goals',
-  preference: 'Preferences',
-  equipment: 'Equipment',
-  availability: 'Availability',
-  nutrition: 'Nutrition',
-  habit: 'Habits',
-  health: 'Health',
-  history: 'History',
-  reaction: 'How sessions felt',
-  communication: 'Communication',
-  note: 'Notes',
-}
-
 function MemorySection() {
+  const tr = useT()
   const memory = useStore((s) => s.memory)
   const coach = useStore((s) => s.coach)
   const addMemory = (item: { category: MemoryCategory; text: string; source: 'user' }) => {
@@ -410,13 +407,13 @@ function MemorySection() {
   }, [memory])
 
   return (
-    <Page back="/profile" title={`What ${coach.name} knows`}>
-      <p className="text-[13.5px] text-text-3 mt-2 mb-4">Everything {coach.name} keeps in mind when coaching you. Add, pin or remove anything. It never leaves this device.</p>
+    <Page back="/profile" title={tr.t('profile.memoryTitle', { name: coach.name })}>
+      <p className="text-[13.5px] text-text-3 mt-2 mb-4">{tr.t('profile.memoryIntro', { name: coach.name })}</p>
       <div className="flex gap-2 mb-5">
         <TextInput
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={`Tell ${coach.name} something to remember`}
+          placeholder={tr.t('profile.memoryPlaceholder', { name: coach.name })}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && text.trim()) {
               addMemory({ category: 'note', text: text.trim(), source: 'user' })
@@ -427,7 +424,7 @@ function MemorySection() {
         <Button
           variant="primary"
           size="icon"
-          aria-label="Add memory"
+          aria-label={tr.t('profile.addMemory')}
           onClick={() => {
             if (text.trim()) {
               addMemory({ category: 'note', text: text.trim(), source: 'user' })
@@ -440,29 +437,29 @@ function MemorySection() {
       </div>
       {memory.length === 0 ? (
         <Card>
-          <EmptyState icon={<CoachMark size={36} />} title="Nothing yet" body={`Talk to ${coach.name} and say “remember…” or add something above.`} />
+          <EmptyState icon={<CoachMark size={36} />} title={tr.t('profile.memoryEmpty')} body={tr.t('profile.memoryEmptyBody', { name: coach.name })} />
         </Card>
       ) : (
         <div className="space-y-5 pb-4">
           {grouped.map(([cat, items]) => (
             <div key={cat}>
-              <SectionLabel>{CATEGORY_LABELS[cat]}</SectionLabel>
+              <SectionLabel>{memoryCategoryLabel(cat)}</SectionLabel>
               <Group>
                 {items.map((m) => (
                   <div key={m.id} className="flex items-start gap-3 px-4 py-3">
                     <div className="flex-1 min-w-0">
                       <div className="text-[14.5px] leading-snug">{m.text}</div>
                       <div className="text-[11.5px] text-text-4 mt-1 flex items-center gap-2">
-                        <span>{m.source === 'onboarding' ? 'From onboarding' : m.source === 'conversation' ? 'From a conversation' : m.source === 'inferred' ? 'Noticed' : 'Added by you'}</span>
+                        <span>{tr.t(`memorySource.${m.source}`)}</span>
                         <span>·</span>
                         <span>{relativeDay(m.createdAt)}</span>
-                        {m.pinned && <Tag tone="accent">Pinned</Tag>}
+                        {m.pinned && <Tag tone="accent">{tr.t('profile.pinned')}</Tag>}
                       </div>
                     </div>
-                    <button aria-label={m.pinned ? 'Unpin' : 'Pin'} onClick={() => updateMemory(m.id, { pinned: !m.pinned })} className={cn('h-8 w-8 rounded-full flex items-center justify-center', m.pinned ? 'text-accent-text' : 'text-text-4 hover:text-text-2')}>
+                    <button aria-label={m.pinned ? tr.t('profile.unpin') : tr.t('profile.pin')} onClick={() => updateMemory(m.id, { pinned: !m.pinned })} className={cn('h-8 w-8 rounded-full flex items-center justify-center', m.pinned ? 'text-accent-text' : 'text-text-4 hover:text-text-2')}>
                       <Pin size={15} />
                     </button>
-                    <button aria-label="Forget" onClick={() => removeMemory(m.id)} className="h-8 w-8 rounded-full flex items-center justify-center text-text-4 hover:text-danger">
+                    <button aria-label={tr.t('profile.forget')} onClick={() => removeMemory(m.id)} className="h-8 w-8 rounded-full flex items-center justify-center text-text-4 hover:text-danger">
                       <Trash2 size={15} />
                     </button>
                   </div>
@@ -478,55 +475,61 @@ function MemorySection() {
 
 /* ------------------------------------------------------------------ Notifications */
 function NotificationsSection() {
+  const tr = useT()
   const prefs = useStore((s) => s.preferences.notifications)
   const update = useStore((s) => s.updateNotificationPreferences)
   const coach = useStore((s) => s.coach)
   const permission = typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   return (
-    <Page back="/profile" title="Notifications">
+    <Page back="/profile" title={tr.t('common.notifications')}>
       <Group className="mt-3">
-        <ListRow label="Notifications" sub={`Contextual nudges from ${coach.name}. Never spam.`} right={<Toggle checked={prefs.enabled} onChange={(v) => update({ enabled: v })} label="Enable notifications" />} />
+        <ListRow label={tr.t('common.notifications')} sub={tr.t('profile.notificationsSub', { name: coach.name })} right={<Toggle checked={prefs.enabled} onChange={(v) => update({ enabled: v })} label={tr.t('profile.enableNotifications')} />} />
       </Group>
       <Group className={cn('mt-4', !prefs.enabled && 'opacity-50 pointer-events-none')}>
-        <ListRow label="Morning plan" sub="“Good morning. Your plan is ready.”" right={<Toggle checked={prefs.morningPlan} onChange={(v) => update({ morningPlan: v })} label="Morning plan" />} />
-        <ListRow label="Workout reminders" sub={`${prefs.reminderMinutesBefore} minutes before`} right={<Toggle checked={prefs.workoutReminders} onChange={(v) => update({ workoutReminders: v })} label="Workout reminders" />} />
-        <Row label="Remind me">
+        <ListRow label={tr.t('profile.morningPlan')} sub={tr.t('profile.morningPlanSub')} right={<Toggle checked={prefs.morningPlan} onChange={(v) => update({ morningPlan: v })} label={tr.t('profile.morningPlan')} />} />
+        <ListRow label={tr.t('profile.workoutReminders')} sub={tr.t('profile.minutesBefore', { minutes: tr.tn('common.minutes', prefs.reminderMinutesBefore) })} right={<Toggle checked={prefs.workoutReminders} onChange={(v) => update({ workoutReminders: v })} label={tr.t('profile.workoutReminders')} />} />
+        <Row label={tr.t('profile.remindMe')}>
           <div className="flex gap-1.5">
             {[15, 30, 60].map((m) => (
               <Chip key={m} size="sm" selected={prefs.reminderMinutesBefore === m} onClick={() => update({ reminderMinutesBefore: m })}>
-                {m} min
+                {m} {tr.t('common.min')}
               </Chip>
             ))}
           </div>
         </Row>
-        <ListRow label="Recovery insights" sub="“You’re recovering well today.”" right={<Toggle checked={prefs.recoveryInsights} onChange={(v) => update({ recoveryInsights: v })} label="Recovery insights" />} />
-        <ListRow label="Missed workout nudge" sub="“You haven’t trained today. Want me to adapt?”" right={<Toggle checked={prefs.missedWorkoutNudge} onChange={(v) => update({ missedWorkoutNudge: v })} label="Missed workout nudge" />} />
-        <ListRow label="Nutrition" sub="Meal planning prompts" right={<Toggle checked={prefs.nutrition} onChange={(v) => update({ nutrition: v })} label="Nutrition" />} />
+        <ListRow label={tr.t('profile.recoveryInsights')} sub={tr.t('profile.recoveryInsightsSub')} right={<Toggle checked={prefs.recoveryInsights} onChange={(v) => update({ recoveryInsights: v })} label={tr.t('profile.recoveryInsights')} />} />
+        <ListRow label={tr.t('profile.missedWorkoutNudge')} sub={tr.t('profile.missedWorkoutNudgeSub')} right={<Toggle checked={prefs.missedWorkoutNudge} onChange={(v) => update({ missedWorkoutNudge: v })} label={tr.t('profile.missedWorkoutNudge')} />} />
+        <ListRow label={tr.t('profile.nutrition')} sub={tr.t('profile.nutritionNudgeSub')} right={<Toggle checked={prefs.nutrition} onChange={(v) => update({ nutrition: v })} label={tr.t('profile.nutrition')} />} />
       </Group>
       <Group className="mt-4">
         <ListRow
-          label="Device notifications"
-          sub={permission === 'granted' ? 'Allowed on this device' : permission === 'denied' ? 'Blocked in browser settings' : permission === 'unsupported' ? 'Install Sportly to your home screen to enable' : 'Not yet allowed'}
-          onClick={permission === 'default' ? () => requestPushPermission().then(() => useStore.getState().toast('Updated', 'success')) : undefined}
+          label={tr.t('profile.deviceNotifications')}
+          sub={permission === 'granted' ? tr.t('profile.permGranted') : permission === 'denied' ? tr.t('profile.permDenied') : permission === 'unsupported' ? tr.t('profile.permUnsupported') : tr.t('profile.permDefault')}
+          onClick={permission === 'default' ? () => requestPushPermission().then(() => useStore.getState().toast(tr.t('common.updated'), 'success')) : undefined}
         />
       </Group>
-      <p className="text-[12px] text-text-3 mt-3">Quiet hours {prefs.quietHours.start}–{prefs.quietHours.end}. Notifications respect {coach.name}’s personality settings.</p>
+      <p className="text-[12px] text-text-3 mt-3">{tr.t('profile.quietHours', { start: prefs.quietHours.start, end: prefs.quietHours.end, name: coach.name })}</p>
     </Page>
   )
 }
 
 /* ------------------------------------------------------------------ Appearance */
 function AppearanceSection() {
+  const tr = useT()
   const prefs = useStore((s) => s.preferences)
   const update = useStore((s) => s.updatePreferences)
   const setTheme = useStore((s) => s.setTheme)
+  const language = useStore((s) => s.preferences.language)
+  const setLanguage = useStore((s) => s.setLanguage)
   return (
-    <Page back="/profile" title="Appearance">
-      <SectionLabel className="mt-3">Theme</SectionLabel>
-      <Segmented id="theme" value={prefs.theme} onChange={setTheme} options={[{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }, { value: 'system', label: 'System' }]} />
+    <Page back="/profile" title={tr.t('profile.appearance')}>
+      <SectionLabel className="mt-3">{tr.t('common.language')}</SectionLabel>
+      <Segmented id="language" value={language} onChange={setLanguage} options={[{ value: 'fr', label: LANGUAGE_NAMES.fr }, { value: 'en', label: LANGUAGE_NAMES.en }]} />
+      <SectionLabel className="mt-6">{tr.t('profile.theme')}</SectionLabel>
+      <Segmented id="theme" value={prefs.theme} onChange={setTheme} options={[{ value: 'dark', label: tr.t('common.dark') }, { value: 'light', label: tr.t('common.light') }, { value: 'system', label: tr.t('common.system') }]} />
       <div className="grid grid-cols-3 gap-2 mt-3">
         {(['dark', 'light', 'system'] as const).map((t) => (
-          <button key={t} onClick={() => setTheme(t)} className={cn('rounded-[16px] border p-2 transition-colors', prefs.theme === t ? 'border-accent' : 'border-border')} aria-label={`${t} theme`}>
+          <button key={t} onClick={() => setTheme(t)} className={cn('rounded-[16px] border p-2 transition-colors', prefs.theme === t ? 'border-accent' : 'border-border')} aria-label={tr.t('profile.themeAria', { theme: tr.t(`common.${t}`).toLowerCase() })}>
             <div className={cn('rounded-[10px] h-16 p-2 flex flex-col gap-1.5', t === 'light' ? 'bg-white' : t === 'dark' ? 'bg-[#0a0a0b]' : 'bg-gradient-to-r from-[#0a0a0b] to-white')}>
               <div className={cn('h-2 w-10 rounded', t === 'light' ? 'bg-black/80' : 'bg-white/80')} />
               <div className="h-2 w-14 rounded bg-[#c6ff3f]" />
@@ -536,12 +539,12 @@ function AppearanceSection() {
         ))}
       </div>
       <Group className="mt-6">
-        <Row label="Reduce motion" sub="Fewer animations">
-          <Segmented id="motion" size="sm" className="w-[190px]" value={prefs.reducedMotion} onChange={(v) => update({ reducedMotion: v })} options={[{ value: 'system', label: 'System' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} />
+        <Row label={tr.t('profile.reduceMotion')} sub={tr.t('profile.reduceMotionSub')}>
+          <Segmented id="motion" size="sm" className="w-[190px]" value={prefs.reducedMotion} onChange={(v) => update({ reducedMotion: v })} options={[{ value: 'system', label: tr.t('common.system') }, { value: 'on', label: tr.t('common.on') }, { value: 'off', label: tr.t('common.off') }]} />
         </Row>
-        <ListRow label="Haptic feedback" right={<Toggle checked={prefs.hapticFeedback} onChange={(v) => update({ hapticFeedback: v })} label="Haptics" />} />
-        <ListRow label="Auto-start rest timer" right={<Toggle checked={prefs.restTimerAutoStart} onChange={(v) => update({ restTimerAutoStart: v })} label="Auto rest timer" />} />
-        <ListRow label="Rest timer sound" right={<Toggle checked={prefs.restTimerSound} onChange={(v) => update({ restTimerSound: v })} label="Rest timer sound" />} />
+        <ListRow label={tr.t('profile.hapticFeedback')} right={<Toggle checked={prefs.hapticFeedback} onChange={(v) => update({ hapticFeedback: v })} label={tr.t('profile.haptics')} />} />
+        <ListRow label={tr.t('profile.autoRestTimer')} right={<Toggle checked={prefs.restTimerAutoStart} onChange={(v) => update({ restTimerAutoStart: v })} label={tr.t('profile.autoRestTimerAria')} />} />
+        <ListRow label={tr.t('profile.restTimerSound')} right={<Toggle checked={prefs.restTimerSound} onChange={(v) => update({ restTimerSound: v })} label={tr.t('profile.restTimerSound')} />} />
       </Group>
     </Page>
   )
@@ -549,17 +552,18 @@ function AppearanceSection() {
 
 /* ------------------------------------------------------------------ Privacy */
 function PrivacySection() {
+  const tr = useT()
   const prefs = useStore((s) => s.preferences)
   const update = useStore((s) => s.updatePreferences)
   return (
-    <Page back="/profile" title="Privacy">
+    <Page back="/profile" title={tr.t('profile.privacy')}>
       <Card className="mt-3">
-        <div className="text-[15px] font-semibold">Your data stays with you</div>
-        <p className="text-[13.5px] text-text-2 mt-1.5 leading-relaxed">Sportly stores your profile, conversations, workouts and attachments on this device only. There is no account and nothing is sent anywhere unless you connect an AI provider yourself.</p>
+        <div className="text-[15px] font-semibold">{tr.t('profile.privacyTitle')}</div>
+        <p className="text-[13.5px] text-text-2 mt-1.5 leading-relaxed">{tr.t('profile.privacyBody')}</p>
       </Card>
       <Group className="mt-4">
-        <ListRow label="Personalization" sub="Let your coach learn from your sessions and conversations" right={<Toggle checked={prefs.privacy.personalization} onChange={(v) => update({ privacy: { ...prefs.privacy, personalization: v } })} label="Personalization" />} />
-        <ListRow label="Usage analytics" sub="Off. Sportly does not collect analytics." right={<Toggle checked={prefs.privacy.analytics} onChange={(v) => update({ privacy: { ...prefs.privacy, analytics: v } })} label="Analytics" />} />
+        <ListRow label={tr.t('profile.personalization')} sub={tr.t('profile.personalizationSub')} right={<Toggle checked={prefs.privacy.personalization} onChange={(v) => update({ privacy: { ...prefs.privacy, personalization: v } })} label={tr.t('profile.personalization')} />} />
+        <ListRow label={tr.t('profile.analytics')} sub={tr.t('profile.analyticsSub')} right={<Toggle checked={prefs.privacy.analytics} onChange={(v) => update({ privacy: { ...prefs.privacy, analytics: v } })} label={tr.t('profile.analyticsAria')} />} />
       </Group>
     </Page>
   )
@@ -567,6 +571,7 @@ function PrivacySection() {
 
 /* ------------------------------------------------------------------ Account */
 function AccountSection() {
+  const tr = useT()
   const navigate = useNavigate()
   const user = useStore((s) => s.user)!
   const resetAll = useStore((s) => s.resetAll)
@@ -584,23 +589,23 @@ function AccountSection() {
       a.click()
       URL.revokeObjectURL(url)
     } catch {
-      useStore.getState().toast('Export is not available here', 'error')
+      useStore.getState().toast(tr.t('profile.exportUnavailable'), 'error')
     }
   }
 
   return (
-    <Page back="/profile" title="Account">
+    <Page back="/profile" title={tr.t('profile.account')}>
       <Card className="mt-3">
         <div className="text-[15px] font-semibold">{user.name}</div>
-        <div className="text-[13px] text-text-3 mt-0.5">Local profile{user.isDemo ? ' · demo' : ''} · since {new Date(user.createdAt).toLocaleDateString()}</div>
+        <div className="text-[13px] text-text-3 mt-0.5">{tr.t('profile.since', { profile: tr.t(user.isDemo ? 'profile.localProfileDemo' : 'profile.localProfile'), date: tr.date(user.createdAt, 'date-year') })}</div>
       </Card>
       <Group className="mt-4">
-        <ListRow label="Export my data" sub="Download everything as JSON" onClick={exportData} />
-        <ListRow label="Load the demo profile" sub="Replace this profile with Alex’s sample data" onClick={() => setConfirm('demo')} />
-        <ListRow label="Reset Sportly" sub="Erase everything on this device" danger onClick={() => setConfirm('reset')} />
+        <ListRow label={tr.t('profile.exportData')} sub={tr.t('profile.exportDataSub')} onClick={exportData} />
+        <ListRow label={tr.t('profile.loadDemo')} sub={tr.t('profile.loadDemoSub')} onClick={() => setConfirm('demo')} />
+        <ListRow label={tr.t('profile.reset')} sub={tr.t('profile.resetSub')} danger onClick={() => setConfirm('reset')} />
       </Group>
-      <Sheet open={Boolean(confirm)} onClose={() => setConfirm(null)} title={confirm === 'reset' ? 'Erase everything?' : 'Load demo profile?'}>
-        <p className="text-[14px] text-text-2 mb-4">{confirm === 'reset' ? 'This removes your profile, conversations, workouts and progress from this device. It cannot be undone.' : 'Your current profile will be replaced with the demo profile and its history.'}</p>
+      <Sheet open={Boolean(confirm)} onClose={() => setConfirm(null)} title={confirm === 'reset' ? tr.t('profile.eraseTitle') : tr.t('profile.loadDemoTitle')}>
+        <p className="text-[14px] text-text-2 mb-4">{confirm === 'reset' ? tr.t('profile.eraseBody') : tr.t('profile.loadDemoBody')}</p>
         <div className="space-y-2 pb-2">
           <Button
             variant={confirm === 'reset' ? 'danger' : 'primary'}
@@ -616,10 +621,10 @@ function AccountSection() {
               setConfirm(null)
             }}
           >
-            {confirm === 'reset' ? 'Erase everything' : 'Load demo'}
+            {confirm === 'reset' ? tr.t('profile.eraseConfirm') : tr.t('profile.loadDemoConfirm')}
           </Button>
           <Button variant="ghost" full onClick={() => setConfirm(null)}>
-            Cancel
+            {tr.t('common.cancel')}
           </Button>
         </div>
       </Sheet>

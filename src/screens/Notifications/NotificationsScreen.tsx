@@ -5,6 +5,7 @@ import { Page } from '@/components/layout/Page'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { CoachMark, EmptyState } from '@/components/ui/Primitives'
+import { useT } from '@/i18n/react'
 import { relativeTime } from '@/lib/dates'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
@@ -12,6 +13,7 @@ import { useEffect } from 'react'
 
 export function NotificationsScreen() {
   const navigate = useNavigate()
+  const tr = useT()
   const notifications = useStore((s) => s.notifications)
   const markRead = useStore((s) => s.markNotificationRead)
   const markAll = useStore((s) => s.markAllNotificationsRead)
@@ -26,28 +28,42 @@ export function NotificationsScreen() {
   }, [])
 
   return (
-    <Page back="/" title="Notifications" right={unread > 0 ? <Button size="sm" variant="ghost" onClick={markAll}>Mark all read</Button> : notifications.length > 0 ? <Button size="sm" variant="ghost" onClick={clear}>Clear</Button> : undefined}>
+    <Page
+      back="/"
+      title={tr.t('common.notifications')}
+      right={
+        unread > 0 ? (
+          <Button size="sm" variant="ghost" onClick={markAll}>
+            {tr.t('calendar.notifications.markAllRead')}
+          </Button>
+        ) : notifications.length > 0 ? (
+          <Button size="sm" variant="ghost" onClick={clear}>
+            {tr.t('calendar.notifications.clear')}
+          </Button>
+        ) : undefined
+      }
+    >
       {!prefs.enabled && (
         <Card padding="sm" className="mt-2 flex items-center gap-3">
           <BellOff size={18} className="text-text-3" />
-          <div className="flex-1 text-[13.5px] text-text-2">Notifications are off.</div>
+          <div className="flex-1 text-[13.5px] text-text-2">{tr.t('calendar.notifications.off')}</div>
           <Button size="sm" variant="secondary" onClick={() => navigate('/profile/notifications')}>
-            Settings
+            {tr.t('common.settings')}
           </Button>
         </Card>
       )}
       {prefs.enabled && permission === 'default' && (
         <Card padding="sm" className="mt-2 flex items-center gap-3">
           <Bell size={18} className="text-accent-text" />
-          <div className="flex-1 text-[13.5px] text-text-2">Get {coachName}’s nudges on this device too.</div>
-          <Button size="sm" variant="primary" onClick={() => requestPushPermission().then(() => useStore.getState().toast('Updated', 'success'))}>
-            Allow
+          <div className="flex-1 text-[13.5px] text-text-2">{tr.t('calendar.notifications.nudges', { name: coachName })}</div>
+          <Button size="sm" variant="primary" onClick={() => requestPushPermission().then(() => useStore.getState().toast(tr.t('common.updated'), 'success'))}>
+            {tr.t('common.allow')}
           </Button>
         </Card>
       )}
       {notifications.length === 0 ? (
         <Card className="mt-3">
-          <EmptyState icon={<CoachMark size={36} />} title="All quiet" body={`${coachName} only speaks up when it matters: your plan, your recovery, and the occasional milestone.`} />
+          <EmptyState icon={<CoachMark size={36} />} title={tr.t('calendar.notifications.allQuiet')} body={tr.t('calendar.notifications.allQuietBody', { name: coachName })} />
         </Card>
       ) : (
         <ul className="mt-3 space-y-2">

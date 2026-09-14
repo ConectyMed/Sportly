@@ -1,10 +1,17 @@
 import type { Attachment, FoodItem, FoodUnit, LoggedMeal, Meal } from '@/domain/types'
+import { foodName, mealSlotIn } from '@/domain/labels'
+import { translator } from '@/i18n'
+import { getLanguage } from '@/i18n/runtime'
+import type { Language } from '@/i18n/types'
+import { foldText, straightenQuotes } from '@/lib/text'
 import { round, uid } from '@/lib/utils'
 import { findFood, findFoodsInText, FOOD_MAP, type FoodRef } from './foodDatabase'
 
 /**
  * Food analysis is behind a provider interface so a real multimodal model can
  * slot in. The local provider is honest: it never claims to have "seen" an image.
+ * Descriptions are understood in English and French; item ids, grams and macros
+ * are language-independent and only the displayed names change.
  */
 export interface FoodAnalysis {
   items: FoodItem[]
@@ -21,6 +28,7 @@ export interface FoodAnalysisRequest {
   text?: string
   image?: { attachment: Attachment; base64?: string; mediaType?: string }
   locale?: string
+  language?: Language
 }
 
 export interface FoodAnalysisProvider {
@@ -31,11 +39,14 @@ export interface FoodAnalysisProvider {
 
 /* ------------------------------------------------------------------ Quantity parsing */
 
-const NUMBER_WORDS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, half: 0.5, quarter: 0.25, double: 2, couple: 2, few: 3, some: 1 }
+const NUMBER_WORDS: Record<string, number> = {
+  a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, half: 0.5, quarter: 0.25, double: 2, couple: 2, few: 3, some: 1,
+  un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six_: 6, demi: 0.5, moitie: 0.5, quart: 0.25, quelques: 3,
+}
 
 function parseNumber(s: string | undefined): number | undefined {
   if (!s) return undefined
-  const t = s.toLowerCase().trim()
+  const t = foldText(s.toLowerCase().trim())
   if (t in NUMBER_WORDS) return NUMBER_WORDS[t]
   if (/^\d+\/\d+$/.test(t)) {
     const [a, b] = t.split('/').map(Number)
@@ -52,37 +63,52 @@ interface Portion {
   guessed: boolean
 }
 
-/** Resolve a portion for a food from any quantity phrase found near it. */
+const OF = "(?:of|de|d'|des|du|de la)"
+const NUMWORD = "\\d+(?:[.,]\\d)?|\\d\\/\\d|one|two|three|four|five|six|a|an|half(?: a| an)?|couple of|few|un|une|deux|trois|quatre|cinq|demi|une demi|la moitie d'un|la moitie d'une|quelques"
+const MEASURE = '(slices?|pieces?|cups?|tbsp|tablespoons?|bowls?|plates?|handfuls?|scoops?|glass(?:es)?|portions?|servings?|fillets?|pints?|tranches?|morceaux?|tasses?|bols?|assiettes?|poignees?|doses?|verres?|filets?|cuilleres? a soupe|cuilleres?|parts?|pintes?)'
+
+/** Resolve a portion for a food from any quantity phrase found near it. `before` and `after` are folded, lower-case text. */
 function portionFor(ref: FoodRef, before: string, after: string): Portion {
   // A weight binds only to the food it sits next to (“80 g oats, a banana” must not make the banana 80 g):
-  // directly before it (allowing “of” and one descriptor word) or directly after it (“chicken 200 g”, “chicken (200g)”).
-  const b = before.toLowerCase()
-  const a = after.toLowerCase()
-  const gramsBefore = b.match(/(\d{1,4}(?:[.,]\d)?)\s?(g|gr|grams?|grammes?|kg)\b\s+(?:of\s+)?(?:(?!(?:with|and|plus|or|then|of)\s)[a-z-]+\s+)?$/)
-  const gramsAfter = a.match(/^\s*[(,]?\s*(?:about|around|roughly)?\s*(\d{1,4}(?:[.,]\d)?)\s?(g|gr|grams?|grammes?|kg)\b/)
+  // directly before it (allowing “of”/“de” and one descriptor word) or directly after it (“chicken 200 g”, “poulet (200g)”).
+  const b = before
+  const a = after
+  const gramsBefore = b.match(new RegExp(`(\\d{1,4}(?:[.,]\\d)?)\\s?(g|gr|grams?|grammes?|kg)\\b\\s+(?:${OF}\\s*)?(?:(?!(?:with|and|plus|or|then|of|avec|et|ou|puis|de|du|des)\\s)[a-z-]+\\s+)?$`))
+  const gramsAfter = a.match(/^\s*[(,]?\s*(?:about|around|roughly|environ|a peu pres)?\s*(\d{1,4}(?:[.,]\d)?)\s?(g|gr|grams?|grammes?|kg)\b/)
   const gramsMatch = gramsAfter ?? gramsBefore
   if (gramsMatch) {
     const n = Number(gramsMatch[1].replace(',', '.'))
     const grams = gramsMatch[2] === 'kg' ? n * 1000 : n
     return { quantity: grams, unit: 'g', grams, guessed: false }
   }
-  const mlMatch = b.match(/(\d{2,4})\s?(ml|millilit\w*)\s+(?:of\s+)?(?:[a-z-]+\s+)?$/) ?? a.match(/^\s*[(,]?\s*(\d{2,4})\s?(ml|millilit)/)
-  if (mlMatch) return { quantity: Number(mlMatch[1]), unit: 'ml', grams: Number(mlMatch[1]), guessed: false }
+  const mlMatch = b.match(new RegExp(`(\\d{2,4})\\s?(ml|millilit\\w*|cl)\\s+(?:${OF}\\s*)?(?:[a-z-]+\\s+)?$`)) ?? a.match(/^\s*[(,]?\s*(\d{2,4})\s?(ml|millilit|cl)/)
+  if (mlMatch) {
+    const n = Number(mlMatch[1]) * (mlMatch[2] === 'cl' ? 10 : 1)
+    return { quantity: n, unit: 'ml', grams: n, guessed: false }
+  }
   // Size words only count when they sit right next to the food.
   const near = `${b.split(/\s+/).slice(-3).join(' ')} ${a.split(/\s+/).slice(0, 2).join(' ')}`
-  const bigness = /\b(big|large|huge|massive|double|extra)\b/.test(near) ? 1.5 : /\b(small|little|mini|light)\b/.test(near) ? 0.65 : 1
-  // "two chicken breasts", "3 eggs", "a slice of bread", "two cups of rice", "half a plate of pasta"
-  const countMatch = before.toLowerCase().match(/(\d+(?:[.,]\d)?|\d\/\d|one|two|three|four|five|six|a|an|half(?: a| an)?|couple of|few)\s+(?:(slices?|pieces?|cups?|tbsp|tablespoons?|bowls?|plates?|handfuls?|scoops?|glass(?:es)?|portions?|servings?|fillets?|pints?)\s+(?:of\s+)?)?(?:[a-z]+\s+)?$/)
+  const bigness = /\b(big|large|huge|massive|double|extra|gros|grosse|grand|grande|enorme|geant|geante)\b/.test(near) ? 1.5 : /\b(small|little|mini|light|petit|petite|leger|legere)\b/.test(near) ? 0.65 : 1
+  // "two chicken breasts", "3 eggs", "a slice of bread", "deux tranches de pain", "un bol de riz", "la moitié d'une pizza"
+  const countMatch = b.match(new RegExp(`(${NUMWORD})\\s+(?:${MEASURE}\\s+(?:${OF}\\s*)?)?(?:[a-z]+\\s+)?$`))
   if (countMatch) {
-    const n = parseNumber(countMatch[1].replace(/ a| an|couple of/, '').trim()) ?? 1
+    const raw = countMatch[1].replace(/ a$| an$|couple of|la moitie d'une?|une demi/, (m) => (m.startsWith('la moitie') || m === 'une demi' ? 'demi' : '')).trim()
+    const n = parseNumber(raw) ?? 1
     const measure = countMatch[2]?.replace(/s$/, '')
-    if (measure === 'cup') return { quantity: n, unit: 'cup', grams: n * (ref.pieceGrams ?? ref.serving), guessed: false }
-    if (measure === 'tbsp' || measure === 'tablespoon') return { quantity: n, unit: 'tbsp', grams: n * 15, guessed: false }
-    if (measure === 'slice') return { quantity: n, unit: 'slice', grams: n * (ref.pieceGrams ?? 30), guessed: false }
-    if (measure === 'bowl' || measure === 'plate' || measure === 'portion' || measure === 'serving') return { quantity: n, unit: 'serving', grams: n * ref.serving * bigness, guessed: false }
-    if (measure === 'handful' || measure === 'scoop') return { quantity: n, unit: 'serving', grams: n * 30, guessed: false }
-    if (measure === 'glass' || measure === 'pint') return { quantity: n, unit: 'serving', grams: n * (measure === 'pint' ? 568 : ref.pieceGrams ?? 250), guessed: false }
-    if (measure === 'fillet' || measure === 'piece') return { quantity: n, unit: 'piece', grams: n * (ref.pieceGrams ?? ref.serving), guessed: false }
+    const isCup = measure === 'cup' || measure === 'tasse'
+    const isTbsp = measure === 'tbsp' || measure === 'tablespoon' || measure === 'cuillere a soupe' || measure === 'cuillere'
+    const isSlice = measure === 'slice' || measure === 'tranche' || measure === 'part'
+    const isServing = measure === 'bowl' || measure === 'plate' || measure === 'portion' || measure === 'serving' || measure === 'bol' || measure === 'assiette' || measure === 'dose'
+    const isHandful = measure === 'handful' || measure === 'scoop' || measure === 'poignee'
+    const isGlass = measure === 'glass' || measure === 'glasse' || measure === 'pint' || measure === 'verre' || measure === 'pinte'
+    const isPiece = measure === 'fillet' || measure === 'piece' || measure === 'morceau' || measure === 'morceaux' || measure === 'filet'
+    if (isCup) return { quantity: n, unit: 'cup', grams: n * (ref.pieceGrams ?? ref.serving), guessed: false }
+    if (isTbsp) return { quantity: n, unit: 'tbsp', grams: n * 15, guessed: false }
+    if (isSlice) return { quantity: n, unit: 'slice', grams: n * (ref.pieceGrams ?? 30), guessed: false }
+    if (isServing) return { quantity: n, unit: 'serving', grams: n * ref.serving * bigness, guessed: false }
+    if (isHandful) return { quantity: n, unit: 'serving', grams: n * 30, guessed: false }
+    if (isGlass) return { quantity: n, unit: 'serving', grams: n * (measure === 'pint' || measure === 'pinte' ? 568 : ref.pieceGrams ?? 250), guessed: false }
+    if (isPiece) return { quantity: n, unit: 'piece', grams: n * (ref.pieceGrams ?? ref.serving), guessed: false }
     if (ref.pieceGrams && ref.unitLabel === 'piece') return { quantity: n, unit: 'piece', grams: n * ref.pieceGrams, guessed: false }
     if (ref.pieceGrams && ref.unitLabel === 'slice') return { quantity: n, unit: 'slice', grams: n * ref.pieceGrams, guessed: false }
     return { quantity: n, unit: 'serving', grams: n * ref.serving * bigness, guessed: n === 1 }
@@ -95,6 +121,7 @@ export function itemFromRef(ref: FoodRef, grams: number, quantity: number, unit:
   return {
     id: uid('fi'),
     foodId: ref.id,
+    // Stored name is the English canonical; screens render foodItemName() in the user's language.
     name: ref.name,
     quantity: round(quantity, 2),
     unit,
@@ -136,13 +163,22 @@ export function totalsOf(items: FoodItem[]): Pick<LoggedMeal, 'calories' | 'prot
   }
 }
 
-/** Parse a free-text meal description into food items. Pure and deterministic. */
-export function analyzeDescription(text: string): FoodAnalysis {
-  const cleaned = text.replace(/^(i (just )?(ate|had|eat)|i'?m eating|for (breakfast|lunch|dinner)|log|this (is|was)|it'?s|it was)\s*/i, '').trim()
+/** Display name of a food item in the user's language. */
+export function foodItemName(i: Pick<FoodItem, 'foodId' | 'name'>, lang: Language = getLanguage()): string {
+  return foodName(i.foodId, i.name, lang)
+}
+
+/** Parse a free-text meal description (English or French) into food items. Pure and deterministic. */
+export function analyzeDescription(text: string, lang: Language = getLanguage()): FoodAnalysis {
+  const tr = translator(lang)
+  const cleaned = straightenQuotes(text)
+    .replace(/^(i (just )?(ate|had|eat)|i'?m eating|for (breakfast|lunch|dinner)|log|this (is|was)|it'?s|it was)\s*/i, '')
+    .replace(/^(j'ai (mange|mangé|pris|bouffe|bouffé)|je viens de manger|je mange|j'ai eu|au (petit-dejeuner|petit-déjeuner|petit dej|dejeuner|déjeuner|diner|dîner|gouter|goûter)|pour (le )?(petit-dejeuner|petit-déjeuner|dejeuner|déjeuner|diner|dîner)|c'(est|etait|était)|ce (midi|soir|matin)|enregistre|note)\s*(?:,\s*)?/i, '')
+    .trim()
   const found = findFoodsInText(cleaned)
   const items: FoodItem[] = []
   const notes: string[] = []
-  const lower = cleaned.toLowerCase()
+  const lower = foldText(cleaned.toLowerCase())
   for (let i = 0; i < found.length; i++) {
     const { ref, index, match } = found[i]
     const before = lower.slice(Math.max(0, index - 40), index)
@@ -150,33 +186,47 @@ export function analyzeDescription(text: string): FoodAnalysis {
     const p = portionFor(ref, before, after)
     items.push(itemFromRef(ref, p.grams, p.quantity, p.unit, p.guessed ? 0.55 : 0.85))
   }
-  // Implicit oil/sauce for cooked proteins when the user mentions "fried" or "creamy".
-  if (/\bfried\b/.test(lower) && !items.some((i) => i.foodId === 'olive_oil')) items.push(itemFromRef(FOOD_MAP.olive_oil, 12, 1, 'tbsp', 0.5))
-  if (/\bcreamy\b/.test(lower) && !items.some((i) => i.foodId === 'creamy_sauce')) items.push(itemFromRef(FOOD_MAP.creamy_sauce, 60, 4, 'tbsp', 0.5))
+  // Implicit oil/sauce for cooked proteins when the user mentions "fried"/"frit" or "creamy"/"à la crème".
+  if (/\b(fried|frit|frits|frite|poele|poelee|poeles|sautes?|saute)\b/.test(lower) && !items.some((i) => i.foodId === 'olive_oil')) items.push(itemFromRef(FOOD_MAP.olive_oil, 12, 1, 'tbsp', 0.5))
+  if (/\b(creamy|a la creme|cremeux|cremeuse)\b/.test(lower) && !items.some((i) => i.foodId === 'creamy_sauce')) items.push(itemFromRef(FOOD_MAP.creamy_sauce, 60, 4, 'tbsp', 0.5))
   const guessed = items.filter((i) => i.confidence < 0.7)
   if (!items.length) {
-    return { items: [], name: cleaned, confidence: 0, notes: ['I could not match that to foods I know. Try naming the main parts, for example “chicken, rice and vegetables”.'], analysis: 'local-estimate', needsDescription: true }
+    return { items: [], name: cleaned, confidence: 0, notes: [tr.t('foodNote.noMatch')], analysis: 'local-estimate', needsDescription: true }
   }
-  if (guessed.length) notes.push(`Portions were assumed for ${guessed.map((i) => i.name.toLowerCase()).join(', ')}. Tell me if any were bigger or smaller.`)
+  if (guessed.length) notes.push(tr.t('foodNote.assumedPortions', { foods: guessed.map((i) => foodItemName(i, lang).toLowerCase()).join(', ') }))
   const sauces = items.filter((i) => FOOD_MAP[i.foodId ?? '']?.category === 'sauce')
-  if (sauces.length) notes.push('Sauces are the biggest source of uncertainty.')
+  if (sauces.length) notes.push(tr.t('foodNote.sauces'))
   const confidence = round(items.reduce((a, i) => a + i.confidence, 0) / items.length, 2)
   return { items, name: mealName(items), confidence, notes, analysis: 'local-estimate' }
 }
 
-export function mealName(items: FoodItem[]): string {
-  // Protein first, then the main carb, then the rest: “Chicken breast, Rice & vegetables”, whatever the portions.
+/** The main items of a meal, protein first, then the main carb, then the rest. */
+function mainItems(items: FoodItem[]): FoodItem[] {
   const rank = (i: FoodItem) => {
     const cat = FOOD_MAP[i.foodId ?? '']?.category
     return cat === 'protein' ? 0 : cat === 'mixed' ? 1 : cat === 'carb' ? 2 : cat === 'sauce' ? 5 : cat === 'fat' ? 4 : 3
   }
-  const main = [...items]
-    .sort((a, b) => rank(a) - rank(b) || b.calories - a.calories)
-    .slice(0, 3)
-    .map((i) => i.name)
-  if (!main.length) return 'Meal'
+  return [...items].sort((a, b) => rank(a) - rank(b) || b.calories - a.calories).slice(0, 3)
+}
+
+/** English canonical meal name (stored): “Chicken breast, Rice & vegetables”. Screens render mealDisplayName(). */
+export function mealName(items: FoodItem[], lang: Language = 'en'): string {
+  const main = mainItems(items).map((i) => foodItemName(i, lang))
+  if (!main.length) return foodName('meal', 'Meal', lang)
   if (main.length === 1) return main[0]
-  return `${main.slice(0, -1).join(', ')} & ${main[main.length - 1].toLowerCase()}`
+  const amp = lang === 'fr' ? 'et' : '&'
+  return `${main.slice(0, -1).join(', ')} ${amp} ${main[main.length - 1].toLowerCase()}`
+}
+
+/**
+ * The meal name in the user's language. A meal whose items all come from the
+ * food database is renamed from its items; anything else (vision results, older
+ * data, user-named meals) keeps its stored name.
+ */
+export function mealDisplayName(meal: Pick<LoggedMeal, 'name' | 'items'>, lang: Language = getLanguage()): string {
+  if (lang === 'en') return meal.name
+  const derivable = meal.items.length > 0 && meal.items.every((i) => i.foodId && FOOD_MAP[i.foodId]) && meal.name === mealName(meal.items, 'en')
+  return derivable ? mealName(meal.items, lang) : meal.name
 }
 
 /** Replace a meal's items and re-derive its totals and name. Used by UI edits and corrections alike. */
@@ -202,8 +252,9 @@ export type MealCorrection =
 
 function matchItem(meal: LoggedMeal, food: string): FoodItem | undefined {
   const ref = findFood(food)
-  const q = food.toLowerCase()
-  return meal.items.find((i) => (ref && i.foodId === ref.id) || i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase()))
+  const q = foldText(food.toLowerCase())
+  const names = (i: FoodItem) => [i.name, foodName(i.foodId, i.name, 'fr')].map((n) => foldText(n.toLowerCase()))
+  return meal.items.find((i) => (ref && i.foodId === ref.id) || names(i).some((n) => n.includes(q) || q.includes(n)))
 }
 
 export interface CorrectionResult {
@@ -212,41 +263,43 @@ export interface CorrectionResult {
   summary: string
 }
 
-/** Apply a correction to a meal, returning a new meal (no duplicates). */
-export function applyCorrection(meal: LoggedMeal, c: MealCorrection): CorrectionResult {
+/** Apply a correction to a meal, returning a new meal (no duplicates). Summaries are in the given language. */
+export function applyCorrection(meal: LoggedMeal, c: MealCorrection, lang: Language = getLanguage()): CorrectionResult {
+  const tr = translator(lang)
+  const nameOf = (i: FoodItem) => foodItemName(i, lang).toLowerCase()
   const finish = (items: FoodItem[], summary: string, extra: Partial<LoggedMeal> = {}): CorrectionResult => ({ meal: withItems(meal, items, extra), applied: true, summary })
   switch (c.type) {
     case 'scale': {
       const items = meal.items.map((i) => rescaleItem(i, i.grams * c.factor))
-      return finish(items, c.factor === 0.5 ? 'Halved everything.' : c.factor < 1 ? `Scaled the meal to ${Math.round(c.factor * 100)}%.` : `Scaled the meal up to ${Math.round(c.factor * 100)}%.`, { portionScale: round(meal.portionScale * c.factor, 2) })
+      return finish(items, c.factor === 0.5 ? tr.t('foodCorrection.halved') : c.factor < 1 ? tr.t('foodCorrection.scaledDown', { pct: Math.round(c.factor * 100) }) : tr.t('foodCorrection.scaledUp', { pct: Math.round(c.factor * 100) }), { portionScale: round(meal.portionScale * c.factor, 2) })
     }
     case 'set_grams': {
       const item = matchItem(meal, c.food)
-      if (!item) return { meal, applied: false, summary: `I do not see ${c.food} in this meal.` }
-      return finish(meal.items.map((i) => (i.id === item.id ? { ...rescaleItem(i, c.grams), unit: 'g', quantity: c.grams, confidence: 0.95 } : i)), `Set ${item.name.toLowerCase()} to ${c.grams} g.`)
+      if (!item) return { meal, applied: false, summary: tr.t('foodCorrection.notInMeal', { food: c.food }) }
+      return finish(meal.items.map((i) => (i.id === item.id ? { ...rescaleItem(i, c.grams), unit: 'g', quantity: c.grams, confidence: 0.95 } : i)), tr.t('foodCorrection.setGrams', { food: nameOf(item), grams: c.grams }))
     }
     case 'set_count': {
       const item = matchItem(meal, c.food)
-      if (!item) return { meal, applied: false, summary: `I do not see ${c.food} in this meal.` }
+      if (!item) return { meal, applied: false, summary: tr.t('foodCorrection.notInMeal', { food: c.food }) }
       const ref = item.foodId ? FOOD_MAP[item.foodId] : undefined
       const per = ref?.pieceGrams ?? (item.quantity > 0 ? item.grams / item.quantity : item.grams)
       const unit: FoodUnit = ref?.unitLabel && ref.unitLabel !== 'g' ? ref.unitLabel : 'piece'
-      return finish(meal.items.map((i) => (i.id === item.id ? { ...rescaleItem(i, per * c.count), quantity: c.count, unit, confidence: 0.9 } : i)), `${item.name}: ${c.count}.`)
+      return finish(meal.items.map((i) => (i.id === item.id ? { ...rescaleItem(i, per * c.count), quantity: c.count, unit, confidence: 0.9 } : i)), tr.t('foodCorrection.setCount', { food: foodItemName(item, lang), count: c.count }))
     }
     case 'more':
     case 'less': {
       const item = matchItem(meal, c.food)
-      if (!item) return { meal, applied: false, summary: `I do not see ${c.food} in this meal.` }
+      if (!item) return { meal, applied: false, summary: tr.t('foodCorrection.notInMeal', { food: c.food }) }
       const factor = c.factor ?? (c.type === 'more' ? 1.5 : 0.6)
-      return finish(meal.items.map((i) => (i.id === item.id ? rescaleItem(i, i.grams * factor) : i)), `${c.type === 'more' ? 'More' : 'Less'} ${item.name.toLowerCase()}: now about ${Math.round(item.grams * factor)} g.`)
+      return finish(meal.items.map((i) => (i.id === item.id ? rescaleItem(i, i.grams * factor) : i)), tr.t(c.type === 'more' ? 'foodCorrection.more' : 'foodCorrection.less', { food: nameOf(item), grams: Math.round(item.grams * factor) }))
     }
     case 'remove': {
       const item = matchItem(meal, c.food)
-      if (!item) return { meal, applied: false, summary: `There is no ${c.food} in this meal.` }
-      return finish(meal.items.filter((i) => i.id !== item.id), `Removed ${item.name.toLowerCase()}.`)
+      if (!item) return { meal, applied: false, summary: tr.t('foodCorrection.noSuch', { food: c.food }) }
+      return finish(meal.items.filter((i) => i.id !== item.id), tr.t('foodCorrection.removed', { food: nameOf(item) }))
     }
     case 'add': {
-      const extra = analyzeDescription(c.text)
+      const extra = analyzeDescription(c.text, lang)
       if (!extra.items.length) return { meal, applied: false, summary: extra.notes[0] }
       const items = [...meal.items]
       for (const it of extra.items) {
@@ -254,10 +307,10 @@ export function applyCorrection(meal: LoggedMeal, c: MealCorrection): Correction
         if (existing) items[items.indexOf(existing)] = rescaleItem(existing, existing.grams + it.grams)
         else items.push(it)
       }
-      return finish(items, `Added ${extra.items.map((i) => i.name.toLowerCase()).join(', ')}.`)
+      return finish(items, tr.t('foodCorrection.added', { foods: extra.items.map(nameOf).join(', ') }))
     }
     case 'slot':
-      return { meal: { ...meal, slot: c.slot, updatedAt: new Date().toISOString() }, applied: true, summary: `Moved to ${c.slot.replace('_', '-')}.` }
+      return { meal: { ...meal, slot: c.slot, updatedAt: new Date().toISOString() }, applied: true, summary: tr.t('foodCorrection.movedSlot', { slot: mealSlotIn(c.slot, lang) }) }
   }
 }
 
@@ -267,13 +320,14 @@ export class LocalFoodAnalysisProvider implements FoodAnalysisProvider {
   id = 'local' as const
   supportsImages = false
   async analyze(req: FoodAnalysisRequest): Promise<FoodAnalysis> {
-    if (req.text?.trim()) return analyzeDescription(req.text)
+    const lang = req.language ?? getLanguage()
+    if (req.text?.trim()) return analyzeDescription(req.text, lang)
     // No vision model on this device: be explicit and ask for a description.
     return {
       items: [],
-      name: 'Meal',
+      name: foodName('meal', 'Meal', 'en'),
       confidence: 0,
-      notes: ['I can’t see photos on this device yet. Tell me what’s on the plate and roughly how much, and I’ll estimate it.'],
+      notes: [translator(lang).t('foodNote.noVision')],
       analysis: 'local-estimate',
       needsDescription: true,
     }
@@ -294,6 +348,7 @@ export class AnthropicVisionFoodProvider implements FoodAnalysisProvider {
   }
   async analyze(req: FoodAnalysisRequest): Promise<FoodAnalysis> {
     if (!req.image?.base64) return this.fallback.analyze(req)
+    const lang = req.language ?? getLanguage()
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -301,7 +356,7 @@ export class AnthropicVisionFoodProvider implements FoodAnalysisProvider {
         body: JSON.stringify({
           model: this.model,
           max_tokens: 800,
-          system: 'You are a nutrition estimator. Given a photo of food (and optional user text), return ONLY JSON: {"items":[{"name":string,"grams":number,"calories":number,"protein_g":number,"carbs_g":number,"fat_g":number,"fiber_g":number,"confidence":0-1}],"name":string,"confidence":0-1,"notes":[string],"is_food":boolean,"is_menu":boolean,"menu_items":[{"name":string,"calories":number,"protein_g":number}]}. Be realistic about portion uncertainty. If the image is a restaurant menu, set is_menu true and list the dishes with estimates.',
+          system: `You are a nutrition estimator. Given a photo of food (and optional user text), return ONLY JSON: {"items":[{"name":string,"grams":number,"calories":number,"protein_g":number,"carbs_g":number,"fat_g":number,"fiber_g":number,"confidence":0-1}],"name":string,"confidence":0-1,"notes":[string],"is_food":boolean,"is_menu":boolean,"menu_items":[{"name":string,"calories":number,"protein_g":number}]}. Be realistic about portion uncertainty. If the image is a restaurant menu, set is_menu true and list the dishes with estimates. Write every name and note in ${lang === 'fr' ? 'French' : 'English'}.`,
           messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: req.image.mediaType ?? 'image/jpeg', data: req.image.base64 } }, { type: 'text', text: req.text?.trim() || 'Estimate this meal.' }] }],
         }),
       })
@@ -309,7 +364,7 @@ export class AnthropicVisionFoodProvider implements FoodAnalysisProvider {
       const data = (await res.json()) as { content: Array<{ type: string; text?: string }> }
       const text = data.content.filter((c) => c.type === 'text').map((c) => c.text).join('')
       const json = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)) as { items?: Array<{ name: string; grams: number; calories: number; protein_g: number; carbs_g: number; fat_g: number; fiber_g?: number; confidence?: number }>; name?: string; confidence?: number; notes?: string[]; is_food?: boolean; is_menu?: boolean }
-      if (json.is_food === false && !json.is_menu) return { items: [], name: 'Not food', confidence: 0, notes: ['That does not look like food to me. Tell me what it is if I got that wrong.'], analysis: 'vision', needsDescription: true }
+      if (json.is_food === false && !json.is_menu) return { items: [], name: foodName('notFood', 'Not food', 'en'), confidence: 0, notes: [translator(lang).t('foodNote.notFood')], analysis: 'vision', needsDescription: true }
       const items: FoodItem[] = (json.items ?? []).map((i) => {
         const ref = findFood(i.name)
         return { id: uid('fi'), foodId: ref?.id, name: i.name, quantity: i.grams, unit: 'g' as const, grams: round(i.grams), calories: round(i.calories), proteinG: round(i.protein_g, 1), carbsG: round(i.carbs_g, 1), fatG: round(i.fat_g, 1), fiberG: i.fiber_g !== undefined ? round(i.fiber_g, 1) : undefined, confidence: i.confidence ?? 0.7 }
@@ -317,7 +372,7 @@ export class AnthropicVisionFoodProvider implements FoodAnalysisProvider {
       return { items, name: json.name ?? mealName(items), confidence: json.confidence ?? 0.7, notes: json.notes ?? [], analysis: 'vision', needsDescription: items.length === 0 }
     } catch (err) {
       console.warn('[food] vision analysis failed, falling back', err)
-      return this.fallback.analyze({ text: req.text })
+      return this.fallback.analyze({ text: req.text, language: lang })
     }
   }
 }

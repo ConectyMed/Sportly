@@ -6,7 +6,9 @@ import { finishWorkout } from '@/coach/coachService'
 import { Button } from '@/components/ui/Button'
 import { Sheet } from '@/components/ui/Sheet'
 import { getExercise } from '@/domain/exercises'
+import { exerciseCue, exerciseName, workoutTitle } from '@/domain/labels'
 import type { WorkoutSet } from '@/domain/types'
+import { useT } from '@/i18n/react'
 import { useElapsed } from '@/lib/hooks'
 import { cn, formatDuration, haptic } from '@/lib/utils'
 import { useStore } from '@/store/useStore'
@@ -14,6 +16,7 @@ import { useStore } from '@/store/useStore'
 export function WorkoutSessionScreen() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const tr = useT()
   const reduce = useReducedMotion()
   const workout = useStore((s) => (id ? s.workouts[id] : undefined))
   const updateSet = useStore((s) => s.updateSet)
@@ -84,9 +87,9 @@ export function WorkoutSessionScreen() {
     return (
       <div className="min-h-dvh flex items-center justify-center p-6 text-center">
         <div>
-          <p className="text-text-2">This workout isn’t available.</p>
+          <p className="text-text-2">{tr.t('workout.unavailable')}</p>
           <Button className="mt-4" onClick={() => navigate('/')}>
-            Back home
+            {tr.t('common.backHome')}
           </Button>
         </div>
       </div>
@@ -113,7 +116,7 @@ export function WorkoutSessionScreen() {
     const isLastOverall = totals.done + 1 === totals.total
     if (isLastOverall) return
     if (prefs.restTimerAutoStart) {
-      const label = isLastSetOfExercise && next ? `Next: ${next.name}` : `Set ${setIndex + 2} of ${exercise.sets.length}`
+      const label = isLastSetOfExercise && next ? tr.t('workout.session.nextLabel', { name: exerciseName(next.exerciseId, next.name) }) : tr.t('workout.session.setOf', { n: setIndex + 2, total: exercise.sets.length })
       setRest({ total: exercise.restSeconds, endsAt: Date.now() + exercise.restSeconds * 1000, label })
     }
     if (isLastSetOfExercise && next) setTimeout(() => setIdx((i) => Math.min(i + 1, workout.exercises.length - 1)), 350)
@@ -146,14 +149,14 @@ export function WorkoutSessionScreen() {
       {/* Header */}
       <div className="pt-safe px-4">
         <div className="flex items-center gap-2 h-14">
-          <button aria-label="Exit workout" onClick={() => setExitOpen(true)} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
+          <button aria-label={tr.t('workout.session.exit')} onClick={() => setExitOpen(true)} className="h-10 w-10 -ml-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
             <X size={22} />
           </button>
           <div className="flex-1 min-w-0 text-center">
-            <div className="title text-[15px] truncate">{workout.title}</div>
+            <div className="title text-[15px] truncate">{workoutTitle(workout)}</div>
             <div className="text-[12px] text-text-3 tabular">{formatDuration(elapsed)}</div>
           </div>
-          <button aria-label="All exercises" onClick={() => setListOpen(true)} className="h-10 w-10 -mr-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
+          <button aria-label={tr.t('workout.session.allExercises')} onClick={() => setListOpen(true)} className="h-10 w-10 -mr-2 rounded-full flex items-center justify-center text-text-2 hover:text-text">
             <List size={20} />
           </button>
         </div>
@@ -161,12 +164,8 @@ export function WorkoutSessionScreen() {
           <motion.div className="h-full bg-accent" animate={{ width: `${(totals.done / Math.max(1, totals.total)) * 100}%` }} transition={{ type: 'spring', stiffness: 200, damping: 30 }} />
         </div>
         <div className="flex justify-between text-[11px] text-text-3 mt-1.5 tabular">
-          <span>
-            Exercise {idx + 1} of {workout.exercises.length}
-          </span>
-          <span>
-            {totals.done}/{totals.total} sets
-          </span>
+          <span>{tr.t('workout.session.exerciseOf', { n: idx + 1, total: workout.exercises.length })}</span>
+          <span>{tr.t('workout.session.setsDone', { done: totals.done, total: totals.total })}</span>
         </div>
       </div>
 
@@ -176,8 +175,8 @@ export function WorkoutSessionScreen() {
           <motion.div key={exercise.id} initial={reduce ? false : { opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={reduce ? undefined : { opacity: 0, x: -24 }} transition={{ duration: 0.2 }}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h1 className="display text-[30px] leading-tight text-balance">{exercise.name}</h1>
-                <p className="text-[14px] text-text-3 mt-2">{exercise.note ?? def.cue}</p>
+                <h1 className="display text-[30px] leading-tight text-balance">{exerciseName(exercise.exerciseId, exercise.name)}</h1>
+                <p className="text-[14px] text-text-3 mt-2">{exerciseCue(exercise.exerciseId, exercise.note ?? def.cue)}</p>
               </div>
               {exerciseDone && (
                 <span className="h-9 w-9 rounded-full bg-accent text-accent-ink flex items-center justify-center shrink-0 mt-1">
@@ -188,9 +187,9 @@ export function WorkoutSessionScreen() {
 
             <div className="mt-6 rounded-[22px] border border-border bg-surface overflow-hidden">
               <div className="grid grid-cols-[44px_1fr_1fr_56px] items-center px-3 py-2 text-[11px] uppercase tracking-wider text-text-3 border-b border-hairline">
-                <span>Set</span>
-                <span className="text-center">{exercise.sets[0]?.targetSeconds ? 'Seconds' : 'Weight'}</span>
-                <span className="text-center">{exercise.sets[0]?.targetSeconds ? '' : 'Reps'}</span>
+                <span>{tr.t('workout.session.set')}</span>
+                <span className="text-center">{exercise.sets[0]?.targetSeconds ? tr.t('workout.session.seconds') : tr.t('workout.session.weight')}</span>
+                <span className="text-center">{exercise.sets[0]?.targetSeconds ? '' : tr.t('workout.session.reps')}</span>
                 <span />
               </div>
               {exercise.sets.map((s, si) => {
@@ -211,8 +210,8 @@ export function WorkoutSessionScreen() {
                             </button>
                           ) : (
                             !s.completed && (
-                              <button aria-label="Start timed set" onClick={() => startWork(s, si)} className="h-9 px-3 rounded-full bg-surface-2 text-text-2 hover:text-text text-[13px] font-medium flex items-center gap-1.5">
-                                <Play size={11} fill="currentColor" /> Go
+                              <button aria-label={tr.t('workout.session.startTimed')} onClick={() => startWork(s, si)} className="h-9 px-3 rounded-full bg-surface-2 text-text-2 hover:text-text text-[13px] font-medium flex items-center gap-1.5">
+                                <Play size={11} fill="currentColor" /> {tr.t('workout.session.go')}
                               </button>
                             )
                           )}
@@ -220,13 +219,13 @@ export function WorkoutSessionScreen() {
                       </>
                     ) : (
                       <>
-                        <Counter value={weight !== undefined ? `${weight}` : '—'} unit={weight !== undefined ? 'kg' : ''} onMinus={() => adjust(s, 'actualWeightKg', -1)} onPlus={() => adjust(s, 'actualWeightKg', 1)} disabled={s.completed || weight === undefined} />
+                        <Counter value={weight !== undefined ? tr.num(weight) : '—'} unit={weight !== undefined ? tr.t('common.kg') : ''} onMinus={() => adjust(s, 'actualWeightKg', -1)} onPlus={() => adjust(s, 'actualWeightKg', 1)} disabled={s.completed || weight === undefined} />
                         <Counter value={`${reps}`} onMinus={() => adjust(s, 'actualReps', -1)} onPlus={() => adjust(s, 'actualReps', 1)} disabled={s.completed} />
                       </>
                     )}
                     <div className="flex justify-end">
                       <button
-                        aria-label={s.completed ? 'Undo set' : 'Complete set'}
+                        aria-label={s.completed ? tr.t('workout.session.undoSet') : tr.t('workout.session.completeSet')}
                         onClick={() => completeSet(s, si)}
                         className={cn('h-10 w-10 rounded-full flex items-center justify-center transition-colors active:scale-95', s.completed ? 'bg-accent text-accent-ink' : 'bg-surface-2 text-text-3 hover:text-text')}
                       >
@@ -241,13 +240,13 @@ export function WorkoutSessionScreen() {
             {next ? (
               <button onClick={() => setIdx(idx + 1)} className="mt-4 w-full flex items-center justify-between rounded-[16px] px-4 py-3 bg-surface border border-border text-left hover:border-border-strong">
                 <div>
-                  <div className="text-[11px] uppercase tracking-wider text-text-3">Up next</div>
-                  <div className="text-[14.5px] font-medium">{next.name}</div>
+                  <div className="text-[11px] uppercase tracking-wider text-text-3">{tr.t('workout.session.upNext')}</div>
+                  <div className="text-[14.5px] font-medium">{exerciseName(next.exerciseId, next.name)}</div>
                 </div>
                 <ChevronRight size={16} className="text-text-3" />
               </button>
             ) : (
-              <div className="mt-4 text-center text-[13px] text-text-3">Last exercise. Finish when you are done.</div>
+              <div className="mt-4 text-center text-[13px] text-text-3">{tr.t('workout.session.lastExercise')}</div>
             )}
           </motion.div>
         </AnimatePresence>
@@ -260,14 +259,14 @@ export function WorkoutSessionScreen() {
             <div className="rounded-[24px] bg-bg-elev border border-border-strong shadow-md p-4 flex items-center gap-4 mb-3">
               <RestRing total={rest.total} left={restLeft} />
               <div className="flex-1 min-w-0">
-                <div className="text-[11px] uppercase tracking-wider text-text-3">Rest</div>
+                <div className="text-[11px] uppercase tracking-wider text-text-3">{tr.t('common.rest')}</div>
                 <div className="text-[15px] font-medium truncate">{rest.label}</div>
                 <div className="flex gap-2 mt-2">
                   <Button size="sm" variant="secondary" onClick={() => setRest((r) => (r ? { ...r, total: r.total + 30, endsAt: r.endsAt + 30_000 } : r))}>
-                    +30s
+                    {tr.t('workout.session.plus30')}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setRest(null)}>
-                    Skip
+                    {tr.t('common.skip')}
                   </Button>
                 </div>
               </div>
@@ -278,33 +277,33 @@ export function WorkoutSessionScreen() {
 
       {/* Footer controls */}
       <div className="sticky bottom-0 bg-bg px-4 pt-2 pb-[max(16px,env(safe-area-inset-bottom))] flex items-center gap-2">
-        <button aria-label="Previous exercise" disabled={idx === 0} onClick={() => setIdx(idx - 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
+        <button aria-label={tr.t('workout.session.previous')} disabled={idx === 0} onClick={() => setIdx(idx - 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
           <ChevronLeft size={20} />
         </button>
         <Button variant={allDone ? 'primary' : 'secondary'} size="lg" full onClick={finish}>
-          {allDone ? 'Finish workout' : 'Finish early'}
+          {allDone ? tr.t('workout.session.finishWorkout') : tr.t('workout.session.finishEarly')}
         </Button>
-        <button aria-label="Next exercise" disabled={!next} onClick={() => setIdx(idx + 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
+        <button aria-label={tr.t('workout.session.next')} disabled={!next} onClick={() => setIdx(idx + 1)} className="h-12 w-12 rounded-full bg-surface border border-border flex items-center justify-center text-text-2 disabled:opacity-30">
           <ChevronRight size={20} />
         </button>
       </div>
 
-      <Sheet open={exitOpen} onClose={() => setExitOpen(false)} title="Leave workout?">
-        <p className="text-[14px] text-text-2 mb-4">Your completed sets are saved. You can come back and continue.</p>
+      <Sheet open={exitOpen} onClose={() => setExitOpen(false)} title={tr.t('workout.session.leave')}>
+        <p className="text-[14px] text-text-2 mb-4">{tr.t('workout.session.leaveBody')}</p>
         <div className="space-y-2 pb-2">
           <Button variant="primary" full onClick={finish}>
-            Finish and save
+            {tr.t('workout.session.finishSave')}
           </Button>
           <Button variant="secondary" full onClick={() => navigate('/')}>
-            Continue later
+            {tr.t('workout.session.continueLater')}
           </Button>
           <Button variant="ghost" full onClick={() => setExitOpen(false)}>
-            Keep going
+            {tr.t('workout.session.keepGoing')}
           </Button>
         </div>
       </Sheet>
 
-      <Sheet open={listOpen} onClose={() => setListOpen(false)} title="Exercises" size="tall">
+      <Sheet open={listOpen} onClose={() => setListOpen(false)} title={tr.t('workout.exercises')} size="tall">
         <ul className="divide-y divide-[var(--hairline)]">
           {workout.exercises.map((e, i) => {
             const done = e.sets.filter((s) => s.completed).length
@@ -318,7 +317,7 @@ export function WorkoutSessionScreen() {
                   className={cn('w-full flex items-center gap-3 py-3.5 text-left', i === idx && 'text-accent-text')}
                 >
                   <span className={cn('h-7 w-7 rounded-full text-[12px] font-semibold flex items-center justify-center tabular', done === e.sets.length ? 'bg-accent text-accent-ink' : 'bg-surface-2 text-text-2')}>{done === e.sets.length ? <Check size={14} strokeWidth={3} /> : i + 1}</span>
-                  <span className="flex-1 text-[15px] font-medium">{e.name}</span>
+                  <span className="flex-1 text-[15px] font-medium">{exerciseName(e.exerciseId, e.name)}</span>
                   <span className="text-[12px] text-text-3 tabular">
                     {done}/{e.sets.length}
                   </span>
@@ -333,16 +332,17 @@ export function WorkoutSessionScreen() {
 }
 
 function Counter({ value, unit, onMinus, onPlus, disabled }: { value: string; unit?: string; onMinus: () => void; onPlus: () => void; disabled?: boolean }) {
+  const tr = useT()
   return (
     <div className={cn('flex items-center justify-center gap-1', disabled && 'opacity-60')}>
-      <button aria-label="Decrease" onClick={onMinus} disabled={disabled} className="h-8 w-8 rounded-full flex items-center justify-center text-text-3 hover:bg-surface-2 disabled:pointer-events-none">
+      <button aria-label={tr.t('common.decrease')} onClick={onMinus} disabled={disabled} className="h-8 w-8 rounded-full flex items-center justify-center text-text-3 hover:bg-surface-2 disabled:pointer-events-none">
         <Minus size={14} />
       </button>
       <span className="min-w-[52px] text-center text-[17px] font-semibold tabular">
         {value}
         {unit && <span className="text-[11px] text-text-3 font-medium ml-0.5">{unit}</span>}
       </span>
-      <button aria-label="Increase" onClick={onPlus} disabled={disabled} className="h-8 w-8 rounded-full flex items-center justify-center text-text-3 hover:bg-surface-2 disabled:pointer-events-none">
+      <button aria-label={tr.t('common.increase')} onClick={onPlus} disabled={disabled} className="h-8 w-8 rounded-full flex items-center justify-center text-text-3 hover:bg-surface-2 disabled:pointer-events-none">
         <Plus size={14} />
       </button>
     </div>

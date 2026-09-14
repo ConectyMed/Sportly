@@ -8,24 +8,27 @@ import { Card, SectionLabel } from '@/components/ui/Card'
 import { Chip, Tag } from '@/components/ui/Chip'
 import { EmptyState, ProgressBar, Stepper } from '@/components/ui/Primitives'
 import { Sheet } from '@/components/ui/Sheet'
-import { GOAL_DESCRIPTIONS, GOAL_LABELS } from '@/domain/labels'
+import { GOAL_TYPES, goalDescription, goalLabel, goalMetricLabel } from '@/domain/labels'
 import type { Goal, GoalType } from '@/domain/types'
+import type { MessageKey } from '@/i18n'
+import { useT } from '@/i18n/react'
 import { uid } from '@/lib/utils'
 import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
 
-const GOAL_TYPES = Object.keys(GOAL_LABELS) as GoalType[]
-const METRICS: Array<{ v: NonNullable<Goal['metric']>; label: string; unit: string; step: number; min: number; max: number }> = [
-  { v: 'body_weight', label: 'Body weight', unit: 'kg', step: 0.5, min: 35, max: 250 },
-  { v: 'bench_press', label: 'Bench press', unit: 'kg', step: 2.5, min: 20, max: 300 },
-  { v: 'squat', label: 'Squat', unit: 'kg', step: 2.5, min: 20, max: 400 },
-  { v: 'deadlift', label: 'Deadlift', unit: 'kg', step: 2.5, min: 20, max: 400 },
-  { v: 'workouts_per_week', label: 'Workouts / week', unit: '/week', step: 1, min: 1, max: 7 },
-  { v: 'steps_per_day', label: 'Steps / day', unit: 'steps', step: 500, min: 2000, max: 30000 },
+/** `unit` is the stored canonical unit; `unitKey` is how it is shown. */
+const METRICS: Array<{ v: NonNullable<Goal['metric']>; unit: string; unitKey: MessageKey; step: number; min: number; max: number }> = [
+  { v: 'body_weight', unit: 'kg', unitKey: 'common.kg', step: 0.5, min: 35, max: 250 },
+  { v: 'bench_press', unit: 'kg', unitKey: 'common.kg', step: 2.5, min: 20, max: 300 },
+  { v: 'squat', unit: 'kg', unitKey: 'common.kg', step: 2.5, min: 20, max: 400 },
+  { v: 'deadlift', unit: 'kg', unitKey: 'common.kg', step: 2.5, min: 20, max: 400 },
+  { v: 'workouts_per_week', unit: '/week', unitKey: 'common.perWeek', step: 1, min: 1, max: 7 },
+  { v: 'steps_per_day', unit: 'steps', unitKey: 'common.steps', step: 500, min: 2000, max: 30000 },
 ]
 
 export function GoalsScreen() {
   const navigate = useNavigate()
+  const tr = useT()
   const goals = useStore((s) => s.goals)
   const user = useStore((s) => s.user)!
   const measurements = useStore((s) => s.measurements)
@@ -55,7 +58,8 @@ export function GoalsScreen() {
       id: editing.id || uid('goal'),
       type: draft.type,
       rank: draft.rank,
-      label: GOAL_LABELS[draft.type],
+      // Stored English canonical label; screens render goalLabel(goal.type).
+      label: goalLabel(draft.type, 'en'),
       metric: draft.metric,
       targetValue: draft.metric ? draft.target : undefined,
       targetUnit: metricDef?.unit,
@@ -67,30 +71,31 @@ export function GoalsScreen() {
       useStore.getState().toast(saved.summary, 'error')
       return
     }
-    addMemory({ category: 'goal', text: `${goal.rank === 'primary' ? 'Primary' : 'Secondary'} goal: ${goal.label}${goal.targetValue ? ` (${goal.targetValue} ${goal.targetUnit})` : ''}`, source: 'user' })
+    const goalText = `${goalLabel(goal.type, tr.lang)}${goal.targetValue && metricDef ? ` (${tr.num(goal.targetValue)} ${tr.t(metricDef.unitKey)})` : ''}`
+    addMemory({ category: 'goal', text: tr.t(goal.rank === 'primary' ? 'progress.mem.primaryGoal' : 'progress.mem.secondaryGoal', { goal: goalText }), source: 'user' })
     setEditing(null)
-    useStore.getState().toast('Goal saved', 'success')
+    useStore.getState().toast(tr.t('progress.goalSaved'), 'success')
   }
 
   return (
-    <Page back="/progress" title="Goals" right={<Button size="icon-sm" variant="ghost" aria-label="Add goal" onClick={() => open()}><Plus size={20} /></Button>}>
-      <p className="text-[13.5px] text-text-3 mt-2 mb-4">Goals steer every workout and every meal {coachName} plans. Change them any time.</p>
+    <Page back="/progress" title={tr.t('progress.goals')} right={<Button size="icon-sm" variant="ghost" aria-label={tr.t('progress.addGoal')} onClick={() => open()}><Plus size={20} /></Button>}>
+      <p className="text-[13.5px] text-text-3 mt-2 mb-4">{tr.t('progress.goalsIntro', { name: coachName })}</p>
       {goals.length === 0 ? (
         <Card>
-          <EmptyState title="No goals yet" body="Pick what matters most. You can add a measurable target too." action={<Button variant="primary" onClick={() => open()}>Add a goal</Button>} />
+          <EmptyState title={tr.t('progress.noGoals')} body={tr.t('progress.noGoalsBodyPick')} action={<Button variant="primary" onClick={() => open()}>{tr.t('progress.addAGoal')}</Button>} />
         </Card>
       ) : (
         <div className="space-y-2.5">
           {goals.map((g) => {
-            const p = goalProgress(g, measurements, workouts, user.availability.daysPerWeek)
+            const p = goalProgress(g, measurements, workouts, user.availability.daysPerWeek, tr.lang)
             return (
               <Card key={g.id} padding="sm">
                 <button onClick={() => open(g)} className="w-full text-left">
                   <div className="flex items-center gap-2">
-                    <span className="text-[16px] font-semibold">{g.label}</span>
-                    <Tag tone={g.rank === 'primary' ? 'accent' : 'default'}>{g.rank}</Tag>
+                    <span className="text-[16px] font-semibold">{goalLabel(g.type)}</span>
+                    <Tag tone={g.rank === 'primary' ? 'accent' : 'default'}>{tr.t(`common.${g.rank}`)}</Tag>
                   </div>
-                  <div className="text-[13px] text-text-3 mt-0.5">{GOAL_DESCRIPTIONS[g.type]}</div>
+                  <div className="text-[13px] text-text-3 mt-0.5">{goalDescription(g.type)}</div>
                   {g.metric && (
                     <div className="mt-3">
                       <div className="flex justify-between text-[12.5px] text-text-2 mb-1.5">
@@ -106,46 +111,46 @@ export function GoalsScreen() {
           })}
         </div>
       )}
-      <SectionLabel className="mt-6">Or just tell {coachName}</SectionLabel>
+      <SectionLabel className="mt-6">{tr.t('progress.orJustTell', { name: coachName })}</SectionLabel>
       <div className="flex flex-wrap gap-2">
-        <Chip onClick={() => navigate('/coach?prefill=' + encodeURIComponent('My goal is to '))}>“My goal is to…”</Chip>
-        <Chip onClick={() => navigate('/coach?prompt=' + encodeURIComponent('My goal is to bench 100 kg'))}>Bench 100 kg</Chip>
-        <Chip onClick={() => navigate('/coach?prompt=' + encodeURIComponent('I want to train 4 times a week'))}>4 workouts a week</Chip>
+        <Chip onClick={() => navigate('/coach?prefill=' + encodeURIComponent(tr.t('progress.prefillMyGoal')))}>{tr.t('progress.chipMyGoal')}</Chip>
+        <Chip onClick={() => navigate('/coach?prompt=' + encodeURIComponent(tr.t('progress.promptBench')))}>{tr.t('progress.chipBench')}</Chip>
+        <Chip onClick={() => navigate('/coach?prompt=' + encodeURIComponent(tr.t('progress.prompt4Workouts')))}>{tr.t('progress.chip4Workouts')}</Chip>
       </div>
 
-      <Sheet open={Boolean(editing)} onClose={() => setEditing(null)} title={editing?.id ? 'Edit goal' : 'New goal'}>
+      <Sheet open={Boolean(editing)} onClose={() => setEditing(null)} title={editing?.id ? tr.t('progress.editGoal') : tr.t('progress.newGoal')}>
         {editing && (
           <div className="space-y-5 pb-2">
             <div>
-              <div className="label mb-2">Goal</div>
+              <div className="label mb-2">{tr.t('progress.goal')}</div>
               <div className="flex flex-wrap gap-2">
                 {GOAL_TYPES.map((t) => (
                   <Chip key={t} size="sm" selected={draft.type === t} onClick={() => setDraft({ ...draft, type: t })}>
-                    {GOAL_LABELS[t]}
+                    {goalLabel(t)}
                   </Chip>
                 ))}
               </div>
             </div>
             <div>
-              <div className="label mb-2">Priority</div>
+              <div className="label mb-2">{tr.t('progress.priority')}</div>
               <div className="flex gap-2">
                 <Chip size="sm" selected={draft.rank === 'primary'} onClick={() => setDraft({ ...draft, rank: 'primary' })}>
-                  Primary
+                  {tr.t('progress.primaryChip')}
                 </Chip>
                 <Chip size="sm" selected={draft.rank === 'secondary'} onClick={() => setDraft({ ...draft, rank: 'secondary' })}>
-                  Secondary
+                  {tr.t('progress.secondaryChip')}
                 </Chip>
               </div>
             </div>
             <div>
-              <div className="label mb-2">Measurable target (optional)</div>
+              <div className="label mb-2">{tr.t('progress.measurableTarget')}</div>
               <div className="flex flex-wrap gap-2">
                 <Chip size="sm" selected={!draft.metric} onClick={() => setDraft({ ...draft, metric: undefined })}>
-                  None
+                  {tr.t('common.none')}
                 </Chip>
                 {METRICS.map((m) => (
                   <Chip key={m.v} size="sm" selected={draft.metric === m.v} onClick={() => setDraft({ ...draft, metric: m.v, target: m.v === 'body_weight' ? user.weightKg : m.v === 'workouts_per_week' ? user.availability.daysPerWeek : m.v === 'steps_per_day' ? 8000 : 60 })}>
-                    {m.label}
+                    {goalMetricLabel(m.v)}
                   </Chip>
                 ))}
               </div>
@@ -153,7 +158,7 @@ export function GoalsScreen() {
                 <div className="flex justify-center mt-4">
                   {(() => {
                     const m = METRICS.find((x) => x.v === draft.metric)!
-                    return <Stepper value={draft.target} min={m.min} max={m.max} step={m.step} unit={m.unit} format={(v) => (m.step < 1 ? v.toFixed(1) : String(v))} onChange={(v) => setDraft({ ...draft, target: v })} />
+                    return <Stepper value={draft.target} min={m.min} max={m.max} step={m.step} unit={tr.t(m.unitKey)} format={(v) => (m.step < 1 ? tr.dec(v, 1) : tr.int(v))} onChange={(v) => setDraft({ ...draft, target: v })} />
                   })()}
                 </div>
               )}
@@ -163,7 +168,7 @@ export function GoalsScreen() {
                 <Button
                   variant="danger"
                   size="icon"
-                  aria-label="Delete goal"
+                  aria-label={tr.t('progress.deleteGoal')}
                   onClick={() => {
                     removeGoal(editing.id)
                     setEditing(null)
@@ -173,7 +178,7 @@ export function GoalsScreen() {
                 </Button>
               )}
               <Button variant="primary" full onClick={save}>
-                Save goal
+                {tr.t('progress.saveGoal')}
               </Button>
             </div>
           </div>

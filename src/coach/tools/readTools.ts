@@ -1,4 +1,6 @@
 import type { DayKey, MemoryCategory } from '@/domain/types'
+import { exerciseName } from '@/domain/labels'
+import { t } from '@/i18n'
 import { todayKey } from '@/lib/dates'
 import { getKnowledge } from '@/knowledge'
 import type { KnowledgeHit } from '@/knowledge'
@@ -97,7 +99,7 @@ export function runRead<Q extends ReadQuery>(query: Q, state: AppState, now = ne
               .filter((x) => x.status === 'planned' && x.scheduledFor > time.today)
               .sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor))[0])
         if (!w) return fail('not_found', query.workoutId ? 'That workout does not exist.' : 'No workout planned today or coming up.')
-        return done({ ...workoutSnapshot(w), exercisesDetail: w.exercises.map((e) => ({ id: e.id, exerciseId: e.exerciseId, name: e.name, sets: e.sets.length, targetReps: e.sets[0]?.targetReps ?? 0, targetWeightKg: e.sets[0]?.targetWeightKg, targetSeconds: e.sets[0]?.targetSeconds })) })
+        return done({ ...workoutSnapshot(w), exercisesDetail: w.exercises.map((e) => ({ id: e.id, exerciseId: e.exerciseId, name: exerciseName(e.exerciseId, e.name), sets: e.sets.length, targetReps: e.sets[0]?.targetReps ?? 0, targetWeightKg: e.sets[0]?.targetWeightKg, targetSeconds: e.sets[0]?.targetSeconds })) })
       }
       case 'get_recent_workouts': {
         const limit = Math.min(Math.max(query.limit ?? 5, 1), 30)
@@ -149,7 +151,7 @@ export function runRead<Q extends ReadQuery>(query: Q, state: AppState, now = ne
       }
     }
   } catch (err) {
-    return fail('failed', err instanceof Error ? err.message : 'Unexpected error while reading state.')
+    return fail('failed', err instanceof Error ? err.message : t('tool.readUnexpected'))
   }
 }
 

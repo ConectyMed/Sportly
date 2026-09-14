@@ -1,5 +1,7 @@
 import type { Conversation, DayKey, Goal, MemoryItem, Workout } from '@/domain/types'
-import { GOAL_LABELS } from '@/domain/labels'
+import { exerciseName, goalLabel, workoutTitle } from '@/domain/labels'
+import { mealDisplayName } from './food/foodAnalysis'
+import { getLanguage, LANGUAGE_NAMES, LOCALES, type Language } from '@/i18n'
 import { addDays, dayKey, todayKey } from '@/lib/dates'
 import { round } from '@/lib/utils'
 import { selectDailyNutrition, selectMealsForDate } from '@/store/selectors'
@@ -53,6 +55,8 @@ export interface WorkoutSnapshot {
 
 export interface CoachContextSnapshot {
   generatedAt: string
+  /** The user's selected language. Every answer must be written in it, whatever the language of the message. */
+  language: { code: Language; name: string; locale: string }
   time: TemporalContext
   profile: {
     name: string
@@ -132,12 +136,12 @@ export interface CoachContextSnapshot {
 export function workoutSnapshot(w: Workout): WorkoutSnapshot {
   return {
     id: w.id,
-    title: w.title,
+    title: workoutTitle(w),
     date: w.scheduledFor,
     status: w.status,
     focus: w.focus,
     minutes: w.estimatedMinutes,
-    exercises: w.exercises.map((e) => e.name),
+    exercises: w.exercises.map((e) => exerciseName(e.exerciseId, e.name)),
     volumeKg: w.status === 'completed' ? round(workoutVolume(w)) : undefined,
     programWeek: w.programWeek,
   }
@@ -145,7 +149,7 @@ export function workoutSnapshot(w: Workout): WorkoutSnapshot {
 
 export function goalSnapshot(g: Goal, state: Pick<AppState, 'measurements' | 'workouts' | 'user'>): GoalSnapshot {
   const p = goalProgress(g, state.measurements, Object.values(state.workouts), state.user?.availability.daysPerWeek ?? 3)
-  return { id: g.id, type: g.type, rank: g.rank, label: g.label || GOAL_LABELS[g.type], metric: g.metric, targetValue: g.targetValue, targetUnit: g.targetUnit, targetDate: g.targetDate, progressPct: round(p.pct * 100), progressLabel: p.label }
+  return { id: g.id, type: g.type, rank: g.rank, label: goalLabel(g.type), metric: g.metric, targetValue: g.targetValue, targetUnit: g.targetUnit, targetDate: g.targetDate, progressPct: round(p.pct * 100), progressLabel: p.label }
 }
 
 export function buildContextSnapshot(state: AppState, conversation?: Conversation, now = new Date()): CoachContextSnapshot {
@@ -169,10 +173,12 @@ export function buildContextSnapshot(state: AppState, conversation?: Conversatio
   const memory = state.memory.filter((m) => !isExpired(m, now))
   const in14 = dayKey(addDays(now, 14))
   const ago7 = since(7)
-  const eventLite = (e: AppState['events'][number]) => ({ id: e.id, date: e.date, title: e.title, type: e.type, status: e.status, workoutId: e.workoutId })
+  const eventLite = (e: AppState['events'][number]) => ({ id: e.id, date: e.date, title: e.workoutId && state.workouts[e.workoutId] ? workoutTitle(state.workouts[e.workoutId]) : e.title, type: e.type, status: e.status, workoutId: e.workoutId })
 
+  const language = getLanguage()
   return {
     generatedAt: time.now,
+    language: { code: language, name: LANGUAGE_NAMES[language], locale: LOCALES[language] },
     time,
     profile: {
       name: user.name,
@@ -213,7 +219,7 @@ export function buildContextSnapshot(state: AppState, conversation?: Conversatio
       targets: daily.targets,
       consumed: { calories: daily.consumed.calories, proteinG: daily.consumed.proteinG, carbsG: daily.consumed.carbsG, fatG: daily.consumed.fatG },
       remaining: daily.remaining,
-      todayMeals: [...daily.meals, ...daily.drafts].map((m) => ({ id: m.id, slot: m.slot, name: m.name, calories: m.calories, proteinG: m.proteinG, status: m.status })),
+      todayMeals: [...daily.meals, ...daily.drafts].map((m) => ({ id: m.id, slot: m.slot, name: mealDisplayName(m), calories: m.calories, proteinG: m.proteinG, status: m.status })),
       yesterday: { calories: round(yMeals.reduce((a, m) => a + m.calories, 0)), proteinG: round(yMeals.reduce((a, m) => a + m.proteinG, 0)), meals: yMeals.length },
       planId: daily.plan?.id,
     },
@@ -296,7 +302,7 @@ export function selectDaySummary(state: Pick<AppState, 'workouts' | 'meals' | 'c
     planned: ws.filter((w) => w.status === 'planned' || w.status === 'in_progress').map(workoutSnapshot),
     completed: ws.filter((w) => w.status === 'completed').map(workoutSnapshot),
     skipped: ws.filter((w) => w.status === 'skipped').map(workoutSnapshot),
-    meals: meals.map((m) => ({ id: m.id, slot: m.slot, name: m.name, calories: m.calories, proteinG: m.proteinG })),
+    meals: meals.map((m) => ({ id: m.id, slot: m.slot, name: mealDisplayName(m), calories: m.calories, proteinG: m.proteinG })),
     calories: round(meals.reduce((a, m) => a + m.calories, 0)),
     proteinG: round(meals.reduce((a, m) => a + m.proteinG, 0)),
     checkIn: ci ? { fatigue: ci.fatigue, energy: ci.energy, sleepHours: ci.sleepHours } : undefined,

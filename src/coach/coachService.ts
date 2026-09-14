@@ -1,6 +1,7 @@
 import type { ActionRecord, Attachment, Conversation, EntityRef, Message, Workout, WorkoutSummary } from '@/domain/types'
-import { GOAL_LABELS } from '@/domain/labels'
-import { addDays, dayKey, diffDays, timeOfDayGreeting, todayKey } from '@/lib/dates'
+import { exerciseName, goalLabel, workoutTitle } from '@/domain/labels'
+import { t, translator } from '@/i18n'
+import { addDays, dayKey, diffDays, timeOfDay, todayKey } from '@/lib/dates'
 import { formatMinutes, sleep, uid } from '@/lib/utils'
 import { fileToDataUrl, loadAttachmentBlob } from '@/store/attachments'
 import { selectDailyNutrition } from '@/store/selectors'
@@ -70,7 +71,8 @@ async function analyzeAttachedFood(state: AppState, text: string, attachments: A
   const image = attachments.find((a) => a.kind === 'image')
   if (!image) return undefined
   const provider = foodProviderFor(state)
-  if (!provider.supportsImages) return provider.analyze({ text })
+  const language = state.preferences.language
+  if (!provider.supportsImages) return provider.analyze({ text, language })
   let base64: string | undefined
   try {
     const blob = await loadAttachmentBlob(image.id)
@@ -81,7 +83,7 @@ async function analyzeAttachedFood(state: AppState, text: string, attachments: A
   } catch (err) {
     console.warn('[food] could not load attachment for analysis', err)
   }
-  return provider.analyze({ text, image: { attachment: image, base64, mediaType: image.mimeType } })
+  return provider.analyze({ text, language, image: { attachment: image, base64, mediaType: image.mimeType } })
 }
 
 /* ------------------------------------------------------------------ Selectors */
@@ -122,8 +124,10 @@ export function buildContext(state: AppState, conversation: Conversation, now = 
   const contextWorkout = conversation.context.lastWorkoutId ? state.workouts[conversation.context.lastWorkoutId] : undefined
   const contextMeal = conversation.context.lastMealId ? state.meals[conversation.context.lastMealId] : undefined
   const targetPerWeek = user.availability.daysPerWeek
+  const language = state.preferences.language
   return {
     now,
+    language,
     time,
     snapshot: buildContextSnapshot(state, conversation, now),
     user,
@@ -147,7 +151,7 @@ export function buildContext(state: AppState, conversation: Conversation, now = 
     checkIns: state.checkIns,
     conversation,
     history: (state.messages[conversation.id] ?? []).slice(-12),
-    insights: generateInsights({ workouts, measurements: state.measurements, checkIns: state.checkIns, goals: state.goals, targetPerWeek }),
+    insights: generateInsights({ workouts, measurements: state.measurements, checkIns: state.checkIns, goals: state.goals, targetPerWeek }, language),
     targetPerWeek,
   }
 }
@@ -167,7 +171,7 @@ function reconcile(reply: CoachReply, records: ActionRecord[]): CoachReply {
   const failed = records.filter((r) => !r.ok)
   if (!failed.length) return reply
   const lines = failed.map((f) => f.summary.replace(/\.$/, ''))
-  const note = failed.length === 1 ? `One thing did not go through: ${lines[0]}.` : `Some of that did not go through: ${lines.join('; ')}.`
+  const note = failed.length === 1 ? t('service.reconcile.one', { line: lines[0] }) : t('service.reconcile.some', { lines: lines.join('; ') })
   return { ...reply, text: `${reply.text.trim()}\n\n${note}` }
 }
 
@@ -193,13 +197,13 @@ function conversationById(id: string): Conversation {
   return useStore.getState().conversations.find((c) => c.id === id)!
 }
 
-/** Normalise what the user typed: trim, straighten smart punctuation, collapse whitespace. */
+/**
+ * Normalise what the user typed: trim and collapse whitespace. Typographic
+ * apostrophes and quotes are kept (they are correct French); every parser folds
+ * them for matching, so “j’ai”, "j'ai" and j´ai are understood alike.
+ */
 export function normalizeMessage(text: string): string {
-  return text
-    .replace(/[’‘`´]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return text.replace(/\s+/g, ' ').trim()
 }
 
 let inflight = false
@@ -227,7 +231,7 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
   try {
     const state = useStore.getState()
     const started = Date.now()
-    if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, hasVisionKey(state) ? 'Looking at your photo' : 'Reading your message')
+    if (attachments.some((a) => a.kind === 'image')) useStore.getState().setCoachTyping(true, hasVisionKey(state) ? t('service.status.lookingPhoto') : t('service.status.reading'))
     const foodAnalysis = await analyzeAttachedFood(state, trimmed, attachments)
 
     // A configured model runs the tool loop; otherwise (or if it fails before doing anything) the built-in engine answers.
@@ -244,7 +248,7 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
           const done = executed.filter((a) => a.ok).map((a) => a.summary.replace(/\.$/, ''))
           return commitReply(
             conversation.id,
-            { text: voice.compose({ core: `${done.length ? `I did this: ${done.join('; ')}.` : 'I could not finish that.'} Then I lost ${model.label}, so nothing else was changed.`, soft: 'Heads up:' }), suggestions: ['Try again', 'What did I do today?'] },
+            { text: voice.compose({ core: t('service.model.lost', { lead: done.length ? t('service.model.did', { done: done.join('; ') }) : t('service.model.couldNotFinish'), label: model.label }), soft: t('service.model.headsUp') }), suggestions: [t('service.sug.tryAgain'), t('service.sug.whatDidToday')] },
             executed.reverse(),
           )
         }
@@ -256,7 +260,7 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
     // A message can carry several requests. Each one gets a fresh context so the
     // second request already sees what the first changed (goal → availability → program).
     const lastCoach = [...(state.messages[conversation.id] ?? [])].reverse().find((m) => m.role === 'coach')
-    const parseOpts: ParseOptions = { expects: lastCoach?.expects, topic: conversation.context.topic, hasAttachments: attachments.length > 0 }
+    const parseOpts: ParseOptions = { expects: lastCoach?.expects, topic: conversation.context.topic, hasAttachments: attachments.length > 0, language: state.preferences.language }
     const parts = !attachments.length ? splitCompound(trimmed, parseOpts) : undefined
     const turns = parts?.map((p) => p.text) ?? [trimmed]
 
@@ -293,8 +297,8 @@ export async function sendMessage(text: string, attachments: Attachment[] = []):
     const coach = useStore.getState().coach
     const voice = buildVoice(coach.personality)
     return commitReply(conversation.id, {
-      text: voice.compose({ core: 'Something went wrong on my side. Nothing was changed. Let’s try that again.', soft: 'Sorry,' }),
-      suggestions: ['Try again', 'Build today’s workout'],
+      text: voice.compose({ core: t('service.error.core'), soft: t('service.error.soft') }),
+      suggestions: [t('service.sug.tryAgain'), t('coach.sug.buildToday')],
     })
   } finally {
     useStore.getState().setCoachTyping(false)
@@ -337,26 +341,26 @@ export function coachSays(text: string, extra: Partial<CoachReply> = {}, convers
 export function startFirstConversation(): void {
   const s = useStore.getState()
   if (!s.user) return
-  const conv = s.createConversation('Getting started')
+  const conv = s.createConversation(t('service.first.title'))
   const voice = buildVoice(s.coach.personality)
   const name = s.user.name.split(' ')[0]
   const goal = s.goals.find((g) => g.rank === 'primary')
   const secondary = s.goals.find((g) => g.rank === 'secondary')
   const days = s.user.availability.daysPerWeek
   const intro = voice.compose({
-    core: `Hey ${name}. I’m ${s.coach.name}, your coach.\n\nI already know the basics: ${goal ? GOAL_LABELS[goal.type].toLowerCase() : 'general fitness'}${secondary ? ` with ${GOAL_LABELS[secondary.type].toLowerCase()} on the side` : ''}, ${days} days a week, about ${formatMinutes(s.user.availability.sessionMinutes)} a session. Let’s figure out what will actually work for you.`,
-    reason: 'I will plan each session around how you are recovering, and I will remember what you tell me, so the more you talk to me the better the coaching gets.',
-    calm: 'No pressure, we build this at your pace.',
-    push: 'Let’s get moving.',
-    quip: 'I do not have a face, but I do have opinions about rest periods.',
+    core: t('service.first.core', { name, coach: s.coach.name, goal: goalLabel(goal?.type ?? 'general_fitness').toLowerCase(), secondary: secondary ? t('service.first.secondary', { goal: goalLabel(secondary.type).toLowerCase() }) : '', days, minutes: formatMinutes(s.user.availability.sessionMinutes) }),
+    reason: t('service.first.reason'),
+    calm: t('service.first.calm'),
+    push: t('service.first.push'),
+    quip: t('service.first.quip'),
   })
   commitReply(conv.id, {
     text: intro,
-    suggestions: ['Build today’s workout', 'Create a 12-week program', 'What should I eat today?', 'I only have 30 minutes'],
+    suggestions: [t('coach.sug.buildToday'), t('coach.sug.create12'), t('coach.sug.whatEatToday'), t('coach.sug.only30')],
   })
   commitReply(conv.id, {
-    text: voice.compose({ core: 'One useful question to start: how are you feeling today, honestly?', soft: 'If you feel like sharing,' }),
-    suggestions: ['Feeling great', 'A bit tired', 'I slept badly'],
+    text: voice.compose({ core: t('service.first.question'), soft: t('service.first.questionSoft') }),
+    suggestions: [t('coach.sug.feelingGreat'), t('coach.sug.bitTired'), t('coach.sug.sleptBadly')],
     expects: 'energy_scale',
   })
 }
@@ -391,18 +395,20 @@ export function finishWorkout(workoutId: string, feeling?: WorkoutSummary['feeli
   if (!w) return undefined
   const summary = completeWorkoutRecord(workoutId, feeling, notes)
   if (!summary) return undefined
-  s.appendActionLog({ id: uid('act'), tool: 'complete_workout', ok: true, source: 'user', at: new Date().toISOString(), summary: `Completed ${w.title} (${summary.setsCompleted} of ${summary.setsPlanned} sets).`, changes: [{ type: 'WORKOUT_COMPLETED', entity: { type: 'workout', id: w.id, label: w.title }, summary: `${w.title} completed` }] })
+  const tr = translator()
+  const title = workoutTitle(w)
+  s.appendActionLog({ id: uid('act'), tool: 'complete_workout', ok: true, source: 'user', at: new Date().toISOString(), summary: tr.t('service.finish.log', { title, done: summary.setsCompleted, total: summary.setsPlanned }), changes: [{ type: 'WORKOUT_COMPLETED', entity: { type: 'workout', id: w.id, label: title }, summary: tr.t('service.finish.change', { title }) }] })
   if (opts.announce === false) return summary
   const voice = buildVoice(s.coach.personality)
   const ratio = summary.setsPlanned ? summary.setsCompleted / summary.setsPlanned : 1
   const core =
     ratio >= 0.9
-      ? `${voice.cheer(workoutId)} ${w.title} done: ${summary.setsCompleted} of ${summary.setsPlanned} sets, ${Math.round(summary.totalVolumeKg).toLocaleString()} kg moved in ${formatMinutes(Math.round(summary.durationSec / 60))}.`
-      : `${w.title} logged: ${summary.setsCompleted} of ${summary.setsPlanned} sets. A shorter session still counts.`
-  const prLine = summary.prs.length ? `New best on ${summary.prs.map((p) => `${p.name} (${p.weightKg} kg × ${p.reps})`).join(', ')}.` : undefined
+      ? tr.t('service.finish.done', { cheer: voice.cheer(workoutId), title, done: summary.setsCompleted, total: summary.setsPlanned, volume: tr.int(Math.round(summary.totalVolumeKg)), duration: formatMinutes(Math.round(summary.durationSec / 60)) })
+      : tr.t('service.finish.partial', { title, done: summary.setsCompleted, total: summary.setsPlanned })
+  const prLine = summary.prs.length ? tr.t('service.finish.pr', { lifts: summary.prs.map((p) => tr.t('service.finish.lift', { name: exerciseName(p.exerciseId, p.name), kg: tr.num(p.weightKg), reps: p.reps })).join(', ') }) : undefined
   coachSays(
-    voice.compose({ core, reason: prLine, extra: 'Eat within a couple of hours and prioritise protein tonight.', calm: 'Rest well.', push: 'Recover like it matters, because it does.', quip: 'Your muscles are filing a formal complaint. Approved.' }),
-    { suggestions: ['What should I eat now?', 'How did I do this week?', 'Plan tomorrow'], references: [{ type: 'workout', id: w.id, label: w.title }] },
+    voice.compose({ core, reason: prLine, extra: tr.t('service.finish.extra'), calm: tr.t('service.finish.calm'), push: tr.t('service.finish.push'), quip: tr.t('service.finish.quip') }),
+    { suggestions: [tr.t('coach.sug.whatEatNow'), tr.t('coach.sug.howDidWeek'), tr.t('coach.sug.planTomorrow')], references: [{ type: 'workout', id: w.id, label: title }] },
   )
   return summary
 }
@@ -446,27 +452,27 @@ export function runNotificationSweep(): void {
   const readiness = computeReadiness(s.checkIns[todayKey()], workouts, todayKey(), s.user.sleepHoursTypical)
 
   if (prefs.morningPlan && hour >= 6 && hour < 12 && tw && tw.status === 'planned' && !has('plan_ready')) {
-    s.addNotification({ kind: 'plan_ready', title: voice.isIntense ? 'Your plan is ready. Let’s go.' : 'Good morning. Your plan is ready.', body: `${tw.title}, about ${formatMinutes(tw.estimatedMinutes)}.`, action: { label: 'See today', to: '/' } })
+    s.addNotification({ kind: 'plan_ready', title: voice.isIntense ? t('service.notify.planReadyIntense') : t('service.notify.planReady'), body: t('service.notify.planReadyBody', { title: workoutTitle(tw), minutes: formatMinutes(tw.estimatedMinutes) }), action: { label: t('service.notify.seeToday'), to: '/' } })
   }
   if (prefs.recoveryInsights && readiness.hasCheckIn && readiness.recommendation === 'push' && !has('recovery')) {
-    s.addNotification({ kind: 'recovery', title: 'You’re recovering well today', body: voice.isIntense ? 'We push harder today.' : 'We can push a little harder if you feel like it.', action: { label: 'Talk to coach', to: '/coach' } })
+    s.addNotification({ kind: 'recovery', title: t('service.notify.recoveryTitle'), body: voice.isIntense ? t('service.notify.recoveryIntense') : t('service.notify.recoveryBody'), action: { label: t('service.notify.talkToCoach'), to: '/coach' } })
   }
   if (prefs.missedWorkoutNudge && hour >= 17 && tw && tw.status === 'planned' && !has('missed')) {
-    s.addNotification({ kind: 'missed', title: 'You haven’t trained today', body: voice.isGentle ? 'Want me to adapt your workout to the time you have?' : 'Want me to adapt your workout? Even 20 minutes counts.', action: { label: 'Adapt it', to: '/coach?prompt=I%20only%20have%2020%20minutes' } })
+    s.addNotification({ kind: 'missed', title: t('service.notify.missedTitle'), body: voice.isGentle ? t('service.notify.missedGentle') : t('service.notify.missedBody'), action: { label: t('service.notify.adaptIt'), to: `/coach?prompt=${encodeURIComponent(t('service.notify.adaptPrompt'))}` } })
   }
   if (prefs.nutrition && hour >= 11 && hour < 14 && !selectTodayNutrition(s) && !has('nutrition')) {
-    s.addNotification({ kind: 'nutrition', title: 'Lunch plan?', body: 'I can put together today’s meals around your training.', action: { label: 'Plan meals', to: '/coach?prompt=What%20should%20I%20eat%20today%3F' } })
+    s.addNotification({ kind: 'nutrition', title: t('service.notify.lunchTitle'), body: t('service.notify.lunchBody'), action: { label: t('service.notify.planMeals'), to: `/coach?prompt=${encodeURIComponent(t('service.notify.planMealsPrompt'))}` } })
   }
   // Milestone: streaks.
   const done = workouts.filter((w) => w.status === 'completed').length
   if ([10, 25, 50, 100].includes(done) && !s.notifications.some((n) => n.kind === 'milestone' && n.title.includes(String(done)))) {
-    s.addNotification({ kind: 'milestone', title: `${done} workouts with ${s.coach.name}`, body: 'Consistency is the whole game. This is what it looks like.', action: { label: 'See progress', to: '/progress' } })
+    s.addNotification({ kind: 'milestone', title: t('service.notify.milestoneTitle', { n: done, coach: s.coach.name }), body: t('service.notify.milestoneBody'), action: { label: t('service.notify.seeProgress'), to: '/progress' } })
   }
   // Tomorrow preview in the evening.
   if (prefs.morningPlan && hour >= 19) {
     const tomorrow = dayKey(addDays(now, 1))
     const next = Object.values(s.workouts).find((w) => w.scheduledFor === tomorrow && w.status === 'planned')
-    if (next && !has('reminder', 'Tomorrow')) s.addNotification({ kind: 'reminder', title: 'Tomorrow', body: `${next.title} is on the plan. ${timeOfDayGreeting(now) === 'Good evening' ? 'Sleep well tonight.' : ''}`.trim(), action: { label: 'Preview', to: `/workout/${next.id}` } })
+    if (next && !has('reminder', t('service.notify.tomorrowTitle'))) s.addNotification({ kind: 'reminder', title: t('service.notify.tomorrowTitle'), body: `${t('service.notify.tomorrowBody', { title: workoutTitle(next) })} ${timeOfDay(now) === 'evening' ? t('service.notify.sleepWell') : ''}`.trim(), action: { label: t('service.notify.preview'), to: `/workout/${next.id}` } })
   }
 }
 

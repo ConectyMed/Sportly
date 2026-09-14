@@ -1,5 +1,9 @@
 import type { ActionRecord, CalendarEvent, CoachCard, Conversation, DomainChange, EntityRef, EquipmentId, Goal, GoalType, MemoryCategory, Workout, WorkoutFocus } from '@/domain/types'
-import { GOAL_LABELS } from '@/domain/labels'
+import { GOAL_TYPES, exerciseName, goalLabel, programDisplayName, workoutTitle } from '@/domain/labels'
+import { t, tn, translator } from '@/i18n'
+import { foldText } from '@/lib/text'
+import { exerciseAliases, getExercise } from '@/domain/exercises'
+import { foodItemName, mealDisplayName } from '../food/foodAnalysis'
 import { addDays, dayKey, fromDayKey, weekdayName } from '@/lib/dates'
 import { hashString, uid } from '@/lib/utils'
 import { selectDailyNutrition } from '@/store/selectors'
@@ -65,7 +69,7 @@ type Handler = (args: Args, state: AppState, ctx: { now: Date; conversation?: Co
 const refuse = (code: ToolCallErrorCode, message: string, candidates?: EntityRef[]): Refusal => ({ error: { code, message, candidates } })
 const isRefusal = (x: Materialised | Refusal): x is Refusal => 'error' in x
 
-const workoutCard = (w: Workout): CoachCard => ({ id: uid('card'), type: 'workout', refId: w.id, title: w.title, subtitle: `${w.estimatedMinutes} min · ${w.exercises.length} exercises` })
+const workoutCard = (w: Workout): CoachCard => ({ id: uid('card'), type: 'workout', refId: w.id, title: workoutTitle(w), subtitle: t('coach.card.workoutSubtitle', { minutes: `${w.estimatedMinutes} ${t('common.min')}`, exercises: tn('common.exercises', w.exercises.length) }) })
 
 function workoutDetail(state: AppState, workoutId: string) {
   const r = executeRead({ tool: 'get_workout', workoutId })
@@ -78,7 +82,7 @@ function mealSummary(state: AppState, mealId: string) {
   const daily = selectDailyNutrition(state, m.date)
   return {
     id: m.id,
-    name: m.name,
+    name: mealDisplayName(m),
     date: m.date,
     slot: m.slot,
     status: m.status,
@@ -86,7 +90,7 @@ function mealSummary(state: AppState, mealId: string) {
     proteinG: m.proteinG,
     carbsG: m.carbsG,
     fatG: m.fatG,
-    items: m.items.map((i) => ({ name: i.name, grams: i.grams, calories: i.calories, proteinG: i.proteinG })),
+    items: m.items.map((i) => ({ name: foodItemName(i), grams: i.grams, calories: i.calories, proteinG: i.proteinG })),
     remainingToday: daily.remaining,
   }
 }
@@ -132,7 +136,7 @@ const HANDLERS: Record<string, Handler> = {
         break
       case 'longer': {
         const minutes = numv(a, 'minutes') ?? w.estimatedMinutes + 15
-        next = keepId(generateWorkout({ ...base, constraints: { ...(w.constraints ?? {}), focus: w.focus, minutes }, seed: `${w.id}-longer` }), `Extended to ${minutes} min`)
+        next = keepId(generateWorkout({ ...base, constraints: { ...(w.constraints ?? {}), focus: w.focus, minutes }, seed: `${w.id}-longer` }), t('workoutHistory.extended', { minutes }))
         break
       }
       case 'lighter':
@@ -149,9 +153,9 @@ const HANDLERS: Record<string, Handler> = {
         break
       }
       case 'replace_exercise': {
-        const q = (str(a, 'exercise') ?? '').toLowerCase()
-        const target = q ? w.exercises.find((e) => e.name.toLowerCase().includes(q) || q.includes(e.name.toLowerCase().split(' ')[0])) : undefined
-        if (!target) return refuse('invalid_input', `Which exercise? ${w.title} has ${w.exercises.map((e) => e.name).join(', ')}.`)
+        const q = foldText((str(a, 'exercise') ?? '').toLowerCase())
+        const target = q ? w.exercises.find((e) => exerciseAliases(getExercise(e.exerciseId)).some((al) => al.includes(q) || q.includes(al.split(' ')[0]))) : undefined
+        if (!target) return refuse('invalid_input', `Which exercise? ${workoutTitle(w)} has ${w.exercises.map((e) => exerciseName(e.exerciseId, e.name)).join(', ')}.`)
         const rep = replaceExercise(w, target.exerciseId, s.user!, workouts)
         if (!rep.replacedWith) return refuse('conflict', `No good substitute for ${rep.original.name} with the user's equipment.`)
         next = rep.workout
@@ -160,11 +164,11 @@ const HANDLERS: Record<string, Handler> = {
       case 'focus': {
         const focus = str(a, 'focus') as WorkoutFocus | undefined
         if (!focus) return refuse('invalid_input', 'focus is required for a focus change.')
-        next = keepId(generateWorkout({ ...base, constraints: { ...(w.constraints ?? {}), focus }, seed: `${w.id}-${focus}` }), `Changed focus to ${focus}`)
+        next = keepId(generateWorkout({ ...base, constraints: { ...(w.constraints ?? {}), focus }, seed: `${w.id}-${focus}` }), t('workoutHistory.focus', { focus: t(`focus.${focus}`) }))
         break
       }
       default:
-        next = keepId(generateWorkout({ ...base, constraints: w.constraints, seed: `${w.id}-regen-${Date.now()}` }), 'Regenerated')
+        next = keepId(generateWorkout({ ...base, constraints: w.constraints, seed: `${w.id}-regen-${Date.now()}` }), t('workoutHistory.regenerated'))
     }
     return { actions: [{ type: 'update_workout', workout: next }], after: (st) => workoutDetail(st, w.id), contextPatch: { lastWorkoutId: w.id, topic: 'workout' }, cards: [workoutCard(next)] }
   },
@@ -176,7 +180,7 @@ const HANDLERS: Record<string, Handler> = {
     if (!toDate) return refuse('invalid_input', `“${str(a, 'toDate')}” is not a date I can read.`)
     if (toDate < dayKey(ctx.now)) return refuse('invalid_input', 'A workout can only be moved to today or later.')
     const clash = Object.values(s.workouts).find((w) => w.id !== r.value.id && w.scheduledFor === toDate && w.status === 'planned')
-    if (clash) return refuse('conflict', `${weekdayName(fromDayKey(toDate))} already has ${clash.title} planned. Ask whether to move that one too, or pick another day.`, [{ type: 'workout', id: clash.id, label: clash.title }])
+    if (clash) return refuse('conflict', `${weekdayName(fromDayKey(toDate))} already has ${workoutTitle(clash)} planned. Ask whether to move that one too, or pick another day.`, [{ type: 'workout', id: clash.id, label: workoutTitle(clash) }])
     return { actions: [{ type: 'reschedule_workout', workoutId: r.value.id, toDate }], after: (st) => workoutDetail(st, r.value.id), contextPatch: { lastWorkoutId: r.value.id, topic: 'calendar' } }
   },
 
@@ -196,7 +200,7 @@ const HANDLERS: Record<string, Handler> = {
     const r = resolveWorkout({ workoutId: str(a, 'workoutId'), when: str(a, 'when') }, s, { statuses: ['planned'], now: ctx.now, conversation: ctx.conversation, verb: 'deleted' })
     if (!r.ok) return { error: r.error }
     const w = r.value
-    return { actions: [{ type: 'remove_workout', workoutId: w.id }], after: () => ({ deleted: true, id: w.id, title: w.title, date: w.scheduledFor }), contextPatch: { lastWorkoutId: undefined, topic: 'calendar' } }
+    return { actions: [{ type: 'remove_workout', workoutId: w.id }], after: () => ({ deleted: true, id: w.id, title: workoutTitle(w), date: w.scheduledFor }), contextPatch: { lastWorkoutId: undefined, topic: 'calendar' } }
   },
 
   plan_week: (a, s, ctx) => {
@@ -219,12 +223,12 @@ const HANDLERS: Record<string, Handler> = {
       if (count !== undefined && week.length >= count) break
       const existing = workouts.find((w) => w.scheduledFor === key && w.status !== 'skipped')
       if (existing) {
-        week.push({ date: key, id: existing.id, title: existing.title, existing: true })
+        week.push({ date: key, id: existing.id, title: workoutTitle(existing), existing: true })
         continue
       }
       const gen = generateWorkout({ user, goals: s.goals, history: [...workouts, ...created.map((c) => ({ ...c, status: 'completed' as const, completedAt: c.scheduledFor }))], date: key, seed: `${key}-week`, constraints: {} })
       created.push(gen)
-      week.push({ date: key, id: gen.id, title: gen.title, existing: false })
+      week.push({ date: key, id: gen.id, title: workoutTitle(gen), existing: false })
     }
     return { actions: created.map((w) => ({ type: 'create_workout', workout: w }) as CoachAction), after: () => ({ sessions: week }), contextPatch: { topic: 'calendar' } }
   },
@@ -239,17 +243,17 @@ const HANDLERS: Record<string, Handler> = {
       actions: [{ type: 'create_program', program, workouts, events, replaceProgramId: active?.id }],
       after: () => {
         const r = executeRead({ tool: 'get_program' })
-        return r.ok ? r.data : { id: program.id, name: program.name }
+        return r.ok ? r.data : { id: program.id, name: programDisplayName(program) }
       },
       contextPatch: { lastProgramId: program.id, topic: 'program' },
-      cards: [{ id: uid('card'), type: 'program', refId: program.id, title: program.name, subtitle: `${program.weeks} weeks · ${program.daysPerWeek} days/week` }],
+      cards: [{ id: uid('card'), type: 'program', refId: program.id, title: programDisplayName(program), subtitle: t('coach.card.programSubtitle', { weeks: tn('common.weeks', program.weeks), days: t('common.daysPerWeekShort', { count: program.daysPerWeek }) }) }],
     }
   },
 
   cancel_program: (_a, s) => {
     const active = Object.values(s.programs).find((p) => p.status === 'active')
     if (!active) return refuse('not_found', 'There is no active program.')
-    return { actions: [{ type: 'cancel_program', programId: active.id }], after: () => ({ cancelled: true, id: active.id, name: active.name }), contextPatch: { topic: 'program' } }
+    return { actions: [{ type: 'cancel_program', programId: active.id }], after: () => ({ cancelled: true, id: active.id, name: programDisplayName(active) }), contextPatch: { topic: 'program' } }
   },
 
   plan_nutrition: (a, s, ctx) => {
@@ -262,7 +266,7 @@ const HANDLERS: Record<string, Handler> = {
       actions: [{ type: 'create_nutrition_plan', plan }],
       after: () => ({ id: plan.id, date: plan.date, calories: plan.calories, proteinG: plan.proteinG, carbsG: plan.carbsG, fatG: plan.fatG, isTrainingDay: plan.isTrainingDay, meals: plan.meals.map((m) => ({ slot: m.slot, name: m.name, calories: m.calories, proteinG: m.proteinG })), rationale: plan.rationale }),
       contextPatch: { lastNutritionPlanId: plan.id, topic: 'nutrition' },
-      cards: [{ id: uid('card'), type: 'nutrition', refId: plan.id, title: 'Today’s nutrition', subtitle: `${plan.calories.toLocaleString()} kcal · ${plan.proteinG} g protein` }],
+      cards: [{ id: uid('card'), type: 'nutrition', refId: plan.id, title: t('coach.card.nutritionTitle'), subtitle: t('coach.card.nutritionSubtitle', { kcal: translator().int(plan.calories), protein: plan.proteinG }) }],
     }
   },
 
@@ -274,7 +278,7 @@ const HANDLERS: Record<string, Handler> = {
     if (!date) return refuse('invalid_input', `“${str(a, 'date')}” is not a date I can read.`)
     if (date > dayKey(ctx.now)) return refuse('invalid_input', 'A meal cannot be logged for a future day.')
     const meal = buildMeal(analysis, { date, slot: (str(a, 'slot') as ReturnType<typeof slotForTime> | undefined) ?? slotForTime(ctx.now), source: 'text', status: 'logged' })
-    return { actions: [{ type: 'log_meal', meal }], after: (st) => mealSummary(st, meal.id), contextPatch: { lastMealId: meal.id, topic: 'nutrition' }, cards: [{ id: uid('card'), type: 'food', refId: meal.id, title: meal.name, subtitle: `${meal.calories} kcal · ${meal.proteinG} g protein` }] }
+    return { actions: [{ type: 'log_meal', meal }], after: (st) => mealSummary(st, meal.id), contextPatch: { lastMealId: meal.id, topic: 'nutrition' }, cards: [{ id: uid('card'), type: 'food', refId: meal.id, title: mealDisplayName(meal), subtitle: t('coach.card.foodSubtitle', { kcal: meal.calories, protein: meal.proteinG }) }] }
   },
 
   update_meal: (a, s, ctx) => {
@@ -311,12 +315,12 @@ const HANDLERS: Record<string, Handler> = {
   delete_meal: (a, s, ctx) => {
     const r = resolveMeal({ mealId: str(a, 'mealId') }, s, ctx.conversation, ctx.now)
     if (!r.ok) return { error: r.error }
-    return { actions: [{ type: 'delete_meal', mealId: r.value.id }], after: (st) => ({ deleted: true, id: r.value.id, name: r.value.name, remainingToday: selectDailyNutrition(st, dayKey(ctx.now)).remaining }), contextPatch: { lastMealId: undefined, topic: 'nutrition' } }
+    return { actions: [{ type: 'delete_meal', mealId: r.value.id }], after: (st) => ({ deleted: true, id: r.value.id, name: mealDisplayName(r.value), remainingToday: selectDailyNutrition(st, dayKey(ctx.now)).remaining }), contextPatch: { lastMealId: undefined, topic: 'nutrition' } }
   },
 
   set_goal: (a, s, ctx) => {
     const type = str(a, 'goal') as GoalType | undefined
-    if (!type || !(type in GOAL_LABELS)) return refuse('invalid_input', 'goal must be a known goal type.')
+    if (!type || !GOAL_TYPES.includes(type)) return refuse('invalid_input', 'goal must be a known goal type.')
     const rank = (str(a, 'rank') as Goal['rank'] | undefined) ?? 'primary'
     const metric = str(a, 'metric') as Goal['metric'] | undefined
     const target = numv(a, 'target')
@@ -326,25 +330,25 @@ const HANDLERS: Record<string, Handler> = {
       id: existing?.id ?? uid('goal'),
       type,
       rank,
-      label: GOAL_LABELS[type],
+      label: goalLabel(type, 'en'),
       metric: metric ?? (existing?.type === type ? existing.metric : undefined),
       targetValue: target ?? (existing?.type === type ? existing.targetValue : undefined),
       targetUnit: metric === 'workouts_per_week' ? '/week' : metric === 'steps_per_day' ? 'steps' : metric ? 'kg' : existing?.type === type ? existing.targetUnit : undefined,
       startValue: metric === 'body_weight' ? s.user!.weightKg : existing?.startValue,
       createdAt: existing?.createdAt ?? ctx.now.toISOString(),
     }
-    const summary = `${GOAL_LABELS[type]}${goal.targetValue ? ` (target ${goal.targetValue} ${goal.targetUnit ?? ''})`.replace(/\s+\)/, ')') : ''}`
+    const summary = `${goalLabel(type)}${goal.targetValue ? t('coach.impact.target', { value: goal.targetValue, unit: goal.targetUnit ?? '' }).replace(/\s+\)/, ')') : ''}`
     return {
       actions: [
         { type: 'set_goal', goal },
-        { type: 'remember', item: { category: 'goal', text: `${rank === 'primary' ? 'Primary' : 'Secondary'} goal: ${summary}`, source: 'conversation' } },
+        { type: 'remember', item: { category: 'goal', text: `${rank === 'primary' ? t('common.primary') : t('common.secondary')} ${t('common.goalWord')}: ${summary}`.replace(/^./, (c) => c.toUpperCase()), source: 'conversation' } },
       ],
       after: (st) => {
         const g = st.goals.find((x) => x.id === goal.id)
         return g ? goalSnapshot(g, st) : { id: goal.id }
       },
       contextPatch: { lastGoalId: goal.id, topic: 'goal' },
-      cards: [{ id: uid('card'), type: 'goal', refId: goal.id, title: goal.label, subtitle: goal.targetValue ? `Target ${goal.targetValue} ${goal.targetUnit ?? ''}`.trim() : `${rank} goal` }],
+      cards: [{ id: uid('card'), type: 'goal', refId: goal.id, title: goalLabel(type), subtitle: goal.targetValue ? t('coach.goal.cardTarget', { target: goal.targetValue, unit: ` ${goal.targetUnit ?? ''}` }).trim() : rank === 'primary' ? t('coach.goal.cardPrimary') : t('coach.goal.cardSecondary') }],
     }
   },
 
@@ -398,7 +402,7 @@ const HANDLERS: Record<string, Handler> = {
     const clean = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
     if (!Object.keys(clean).length) return refuse('invalid_input', 'Give daysPerWeek, preferredDays or sessionMinutes.')
     const actions: CoachAction[] = [{ type: 'update_availability', patch: clean }]
-    if (days) actions.push({ type: 'remember', item: { category: 'availability', text: `Trains ${days.length} day${days.length === 1 ? '' : 's'} a week: ${days.map((d) => weekdayName(new Date(2024, 0, 7 + d), true)).join(', ')}`, source: 'conversation' } })
+    if (days) actions.push({ type: 'remember', item: { category: 'availability', text: t('coach.avail.memory', { days: tn('common.days', days.length), names: days.map((d) => weekdayName(new Date(2024, 0, 7 + d), true)).join(', ') }), source: 'conversation' } })
     return { actions, after: (st) => ({ ...st.user!.availability }), contextPatch: { lastAvailabilityScope: 'always', topic: 'calendar' } }
   },
 
@@ -447,7 +451,7 @@ const HANDLERS: Record<string, Handler> = {
     if (!toDate) return refuse('invalid_input', `“${str(a, 'toDate')}” is not a date I can read.`)
     if (ev.workoutId) {
       const clash = Object.values(s.workouts).find((w) => w.id !== ev.workoutId && w.scheduledFor === toDate && w.status === 'planned')
-      if (clash) return refuse('conflict', `${weekdayName(fromDayKey(toDate))} already has ${clash.title} planned.`, [{ type: 'workout', id: clash.id, label: clash.title }])
+      if (clash) return refuse('conflict', `${weekdayName(fromDayKey(toDate))} already has ${workoutTitle(clash)} planned.`, [{ type: 'workout', id: clash.id, label: workoutTitle(clash) }])
     }
     return { actions: [{ type: 'move_event', eventId: ev.id, toDate }], after: (st) => eventLite(st.events.find((e) => e.id === ev.id)), contextPatch: { lastEventId: ev.id, topic: 'calendar' } }
   },

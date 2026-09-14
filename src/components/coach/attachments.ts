@@ -1,4 +1,5 @@
 import type { Attachment } from '@/domain/types'
+import { t } from '@/i18n'
 import { uid } from '@/lib/utils'
 import { makeImagePreview, saveAttachmentBlob } from '@/store/attachments'
 
@@ -60,7 +61,7 @@ export async function createVoiceAttachment(blob: Blob, durationSec: number, tra
   const att: Attachment = {
     id,
     kind: 'audio',
-    name: `Voice note · ${Math.round(durationSec)}s`,
+    name: t('coachScreen.voiceNoteName', { s: Math.round(durationSec) }),
     mimeType: blob.type || 'audio/webm',
     size: blob.size,
     durationSec,

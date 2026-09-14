@@ -2,6 +2,7 @@ import { ArrowUp, Camera, FileText, Image as ImageIcon, Mic, Paperclip, Square, 
 import { AnimatePresence, motion } from 'motion/react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Attachment } from '@/domain/types'
+import { useT } from '@/i18n/react'
 import { cn, formatBytes, haptic } from '@/lib/utils'
 import { Sheet } from '@/components/ui/Sheet'
 import { createAttachmentFromFile, createVoiceAttachment } from './attachments'
@@ -30,6 +31,7 @@ function getSpeechRecognition(): SpeechRecognitionCtor | undefined {
 }
 
 export function Composer({ placeholder, disabled, onSend, initialText }: ComposerProps) {
+  const tr = useT()
   const [text, setText] = useState(initialText ?? '')
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [attachOpen, setAttachOpen] = useState(false)
@@ -89,7 +91,7 @@ export function Composer({ placeholder, disabled, onSend, initialText }: Compose
     if (SR) {
       try {
         const rec = new SR()
-        rec.lang = navigator.language || 'en-US'
+        rec.lang = tr.lang === 'fr' ? 'fr-FR' : 'en-US'
         rec.continuous = false
         rec.interimResults = true
         let finalText = ''
@@ -169,11 +171,11 @@ export function Composer({ placeholder, disabled, onSend, initialText }: Compose
                     {a.kind === 'audio' ? <Mic size={16} className="text-accent-text" /> : <FileText size={16} className="text-text-2" />}
                     <div className="min-w-0">
                       <div className="text-[12px] font-medium truncate">{a.name}</div>
-                      <div className="text-[11px] text-text-3">{a.kind === 'audio' ? 'Voice note' : formatBytes(a.size)}</div>
+                      <div className="text-[11px] text-text-3">{a.kind === 'audio' ? tr.t('coachScreen.voiceNote') : formatBytes(a.size)}</div>
                     </div>
                   </div>
                 )}
-                <button aria-label="Remove attachment" onClick={() => setAttachments((x) => x.filter((y) => y.id !== a.id))} className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-text text-bg flex items-center justify-center">
+                <button aria-label={tr.t('coachScreen.removeAttachment')} onClick={() => setAttachments((x) => x.filter((y) => y.id !== a.id))} className="absolute -top-1.5 -right-1.5 h-5 w-5 rounded-full bg-text text-bg flex items-center justify-center">
                   <X size={12} />
                 </button>
               </div>
@@ -183,7 +185,7 @@ export function Composer({ placeholder, disabled, onSend, initialText }: Compose
       </AnimatePresence>
 
       <div className={cn('flex items-end gap-1.5 rounded-[26px] border border-border-strong px-1.5 py-1.5 shadow-md blur-bar transition-colors', recording !== 'idle' && 'border-accent')} style={{ background: 'var(--composer-bg)' }}>
-        <button aria-label="Attach" onClick={() => setAttachOpen(true)} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface-2 shrink-0" disabled={disabled}>
+        <button aria-label={tr.t('coachScreen.attach')} onClick={() => setAttachOpen(true)} className="h-10 w-10 rounded-full flex items-center justify-center text-text-2 hover:text-text hover:bg-surface-2 shrink-0" disabled={disabled}>
           <Paperclip size={19} />
         </button>
         <textarea
@@ -197,20 +199,20 @@ export function Composer({ placeholder, disabled, onSend, initialText }: Compose
             }
           }}
           rows={1}
-          placeholder={recording === 'recording' ? `Recording… ${recSeconds}s` : recording === 'dictating' ? 'Listening…' : placeholder}
-          aria-label="Message your coach"
+          placeholder={recording === 'recording' ? tr.t('coachScreen.recording', { s: recSeconds }) : recording === 'dictating' ? tr.t('coachScreen.listening') : placeholder}
+          aria-label={tr.t('coachScreen.messageYourCoach')}
           className="flex-1 bg-transparent resize-none outline-none text-[16px] leading-[22px] py-[9px] px-1 placeholder:text-text-4 max-h-[140px]"
           disabled={disabled}
           enterKeyHint="send"
         />
         {canSend ? (
-          <motion.button key="send" aria-label="Send" onClick={submit} initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="h-10 w-10 rounded-full bg-accent text-accent-ink flex items-center justify-center shrink-0 active:scale-95">
+          <motion.button key="send" aria-label={tr.t('coachScreen.send')} onClick={submit} initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="h-10 w-10 rounded-full bg-accent text-accent-ink flex items-center justify-center shrink-0 active:scale-95">
             <ArrowUp size={19} strokeWidth={2.5} />
           </motion.button>
         ) : (
           <button
             key="mic"
-            aria-label={recording !== 'idle' ? 'Stop' : 'Voice input'}
+            aria-label={recording !== 'idle' ? tr.t('coachScreen.stop') : tr.t('coachScreen.voiceInput')}
             onClick={startVoice}
             disabled={disabled}
             className={cn('h-10 w-10 rounded-full flex items-center justify-center shrink-0 transition-colors', recording !== 'idle' ? 'bg-accent text-accent-ink' : 'text-text-2 hover:text-text hover:bg-surface-2')}
@@ -224,14 +226,14 @@ export function Composer({ placeholder, disabled, onSend, initialText }: Compose
       <input ref={imageRef} type="file" hidden accept="image/*" multiple onChange={(e) => addFiles(e.target.files)} />
       <input ref={cameraRef} type="file" hidden accept="image/*" capture="environment" onChange={(e) => addFiles(e.target.files)} />
 
-      <Sheet open={attachOpen} onClose={() => setAttachOpen(false)} title="Add to message">
+      <Sheet open={attachOpen} onClose={() => setAttachOpen(false)} title={tr.t('coachScreen.addToMessage')}>
         <div className="grid grid-cols-3 gap-2 pb-2">
-          <AttachOption icon={<Camera size={22} />} label="Camera" onClick={() => cameraRef.current?.click()} />
-          <AttachOption icon={<ImageIcon size={22} />} label="Photo" onClick={() => imageRef.current?.click()} />
-          <AttachOption icon={<FileText size={22} />} label="PDF / file" onClick={() => fileRef.current?.click()} />
+          <AttachOption icon={<Camera size={22} />} label={tr.t('coachScreen.camera')} onClick={() => cameraRef.current?.click()} />
+          <AttachOption icon={<ImageIcon size={22} />} label={tr.t('coachScreen.photo')} onClick={() => imageRef.current?.click()} />
+          <AttachOption icon={<FileText size={22} />} label={tr.t('coachScreen.file')} onClick={() => fileRef.current?.click()} />
         </div>
-        <p className="text-[12px] text-text-3 text-center pb-2">Photos of meals, gym setups, plans or bloodwork. Your coach keeps them with your history.</p>
-        {processing && <p className="text-[12px] text-accent-text text-center">Preparing…</p>}
+        <p className="text-[12px] text-text-3 text-center pb-2">{tr.t('coachScreen.attachHint')}</p>
+        {processing && <p className="text-[12px] text-accent-text text-center">{tr.t('coachScreen.preparing')}</p>}
       </Sheet>
     </div>
   )

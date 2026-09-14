@@ -211,7 +211,7 @@ describe('configuration', () => {
 
   it('migration: an older snapshot with an unknown provider falls back to local and keeps everything else', () => {
     const persisted = JSON.parse(localStorage.getItem('sportly.v1')!)
-    expect(persisted.version).toBe(4)
+    expect(persisted.version).toBe(5)
     const older = { ...persisted, version: 3, state: { ...persisted.state, coach: { ...persisted.state.coach, provider: 'mystery-cloud' } } }
     localStorage.setItem('sportly.v1', JSON.stringify(older))
     void useStore.persist.rehydrate()

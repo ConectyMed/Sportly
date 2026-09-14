@@ -1,5 +1,9 @@
 import { e1rm, getExercise } from '@/domain/exercises'
+import { exerciseName } from '@/domain/labels'
 import type { DailyCheckIn, DayKey, Goal, Measurement, Workout } from '@/domain/types'
+import { translator } from '@/i18n'
+import { getLanguage } from '@/i18n/runtime'
+import type { Language } from '@/i18n/types'
 import { addDays, dayKey, diffDays, startOfWeek, todayKey } from '@/lib/dates'
 import { avg, round } from '@/lib/utils'
 import { workoutVolume } from './workoutGenerator'
@@ -146,8 +150,9 @@ export interface InsightInput {
   targetPerWeek: number
 }
 
-export function generateInsights(input: InsightInput): Insight[] {
+export function generateInsights(input: InsightInput, lang: Language = getLanguage()): Insight[] {
   const { workouts, measurements, checkIns, goals, targetPerWeek } = input
+  const tr = translator(lang)
   const insights: Insight[] = []
   const stats = weeklyStats(workouts, 9)
   const thisMonth = stats.slice(-4)
@@ -160,8 +165,8 @@ export function generateInsights(input: InsightInput): Insight[] {
       insights.push({
         id: 'volume',
         kind: pct > 0 ? 'positive' : 'watch',
-        text: pct > 0 ? `You have increased your average training volume by ${pct}% this month.` : `Training volume is down ${Math.abs(pct)}% versus last month.`,
-        detail: pct > 0 ? 'Progressive overload is working. Keep the jumps small.' : 'Not a problem if it was planned. If not, we can rebuild gradually.',
+        text: pct > 0 ? tr.t('insight.volumeUp', { pct }) : tr.t('insight.volumeDown', { pct: Math.abs(pct) }),
+        detail: tr.t(pct > 0 ? 'insight.volumeUp.detail' : 'insight.volumeDown.detail'),
       })
   }
 
@@ -170,11 +175,11 @@ export function generateInsights(input: InsightInput): Insight[] {
     insights.push({
       id: 'streak',
       kind: 'positive',
-      text: `You have trained consistently for ${streak.current} weeks.`,
-      detail: streak.current >= 4 ? 'This is where results compound. Protect the habit.' : 'Two more weeks and it becomes a habit.',
+      text: tr.t('insight.streak', { weeks: streak.current }),
+      detail: tr.t(streak.current >= 4 ? 'insight.streak.detail.long' : 'insight.streak.detail.short'),
     })
   else if (completedWorkouts(workouts).length > 0 && streak.thisWeek === 0 && new Date().getDay() >= 4)
-    insights.push({ id: 'week', kind: 'watch', text: 'No sessions yet this week.', detail: 'Even a 25-minute session keeps the streak alive.' })
+    insights.push({ id: 'week', kind: 'watch', text: tr.t('insight.week'), detail: tr.t('insight.week.detail') })
 
   // Sleep vs missed sessions.
   const skipped = workouts.filter((w) => w.status === 'skipped')
@@ -184,7 +189,7 @@ export function generateInsights(input: InsightInput): Insight[] {
       return c?.sleepHours !== undefined && c.sleepHours < 6.5
     })
     if (shortSleep.length >= Math.max(2, Math.ceil(skipped.length * 0.5)))
-      insights.push({ id: 'sleep-miss', kind: 'watch', text: 'You tend to miss workouts after poor sleep.', detail: 'On short-sleep days, I will suggest a lighter session instead of skipping.' })
+      insights.push({ id: 'sleep-miss', kind: 'watch', text: tr.t('insight.sleepMiss'), detail: tr.t('insight.sleepMiss.detail') })
   }
 
   // Sleep vs performance.
@@ -194,7 +199,7 @@ export function generateInsights(input: InsightInput): Insight[] {
     const good = withSleep.filter((x) => x.s! >= 7).map((x) => x.w.summary?.totalVolumeKg ?? workoutVolume(x.w))
     const poor = withSleep.filter((x) => x.s! < 6.5).map((x) => x.w.summary?.totalVolumeKg ?? workoutVolume(x.w))
     if (good.length >= 3 && poor.length >= 2 && avg(good) > avg(poor) * 1.1)
-      insights.push({ id: 'sleep-perf', kind: 'neutral', text: `You lift about ${round(((avg(good) - avg(poor)) / avg(poor)) * 100)}% more volume after 7+ hours of sleep.`, detail: 'Sleep is the cheapest performance enhancer you have.' })
+      insights.push({ id: 'sleep-perf', kind: 'neutral', text: tr.t('insight.sleepPerf', { pct: round(((avg(good) - avg(poor)) / avg(poor)) * 100) }), detail: tr.t('insight.sleepPerf.detail') })
   }
 
   // Weight trend against goal.
@@ -204,41 +209,42 @@ export function generateInsights(input: InsightInput): Insight[] {
     const wantsGain = primary.type === 'build_muscle' || primary.type === 'strength'
     const wantsLoss = primary.type === 'lose_fat'
     if (trend.stalled && (wantsGain || wantsLoss))
-      insights.push({ id: 'stall', kind: 'watch', text: 'Your weight has been flat for about three weeks.', detail: wantsGain ? 'Time to add roughly 150 kcal per day, mostly carbs around training.' : 'A small 150–200 kcal reduction or an extra 2,000 daily steps will restart it.' })
+      insights.push({ id: 'stall', kind: 'watch', text: tr.t('insight.stall'), detail: tr.t(wantsGain ? 'insight.stall.detail.gain' : 'insight.stall.detail.loss') })
     else if (wantsGain && trend.change30 > 0)
-      insights.push({ id: 'gain', kind: trend.weeklyRate! <= 0.5 ? 'positive' : 'watch', text: `Up ${trend.change30} kg this month (${trend.weeklyRate} kg/week).`, detail: trend.weeklyRate! <= 0.5 ? 'A clean rate for building muscle without much fat.' : 'A little fast. Trim 100 kcal so more of it is muscle.' })
+      insights.push({ id: 'gain', kind: trend.weeklyRate! <= 0.5 ? 'positive' : 'watch', text: tr.t('insight.gain', { kg: tr.num(trend.change30), rate: tr.num(trend.weeklyRate ?? 0, 2) }), detail: tr.t(trend.weeklyRate! <= 0.5 ? 'insight.gain.detail.clean' : 'insight.gain.detail.fast') })
     else if (wantsLoss && trend.change30 < 0)
-      insights.push({ id: 'loss', kind: 'positive', text: `Down ${Math.abs(trend.change30)} kg this month.`, detail: 'Steady. Your strength is holding, which means the loss is mostly fat.' })
+      insights.push({ id: 'loss', kind: 'positive', text: tr.t('insight.loss', { kg: tr.num(Math.abs(trend.change30)) }), detail: tr.t('insight.loss.detail') })
   }
 
   // Recent PR.
   const prs = personalRecords(workouts)
   const recentPR = prs.find((p) => diffDays(new Date(), p.date) <= 14)
-  if (recentPR) insights.push({ id: 'pr', kind: 'positive', text: `New best on ${recentPR.name}: ${recentPR.weightKg} kg × ${recentPR.reps}.`, detail: `Estimated max ${round(recentPR.e1rm)} kg.` })
+  if (recentPR) insights.push({ id: 'pr', kind: 'positive', text: tr.t('insight.pr', { name: exerciseName(recentPR.exerciseId, recentPR.name, lang), kg: tr.num(recentPR.weightKg), reps: recentPR.reps }), detail: tr.t('insight.pr.detail', { kg: round(recentPR.e1rm) }) })
 
   // Time of day pattern.
   if (done.length >= 8) {
     const hours = done.map((w) => new Date(w.completedAt!).getHours())
     const morning = hours.filter((h) => h < 12).length
-    if (morning / hours.length >= 0.7) insights.push({ id: 'morning', kind: 'neutral', text: 'You complete most sessions before noon.', detail: 'I will keep suggesting morning slots when your week gets busy.' })
-    else if (morning / hours.length <= 0.2) insights.push({ id: 'evening', kind: 'neutral', text: 'You are an evening trainer.', detail: 'Pre-workout meals matter more for you. I plan them in.' })
+    if (morning / hours.length >= 0.7) insights.push({ id: 'morning', kind: 'neutral', text: tr.t('insight.morning'), detail: tr.t('insight.morning.detail') })
+    else if (morning / hours.length <= 0.2) insights.push({ id: 'evening', kind: 'neutral', text: tr.t('insight.evening'), detail: tr.t('insight.evening.detail') })
   }
 
   return insights.slice(0, 5)
 }
 
-export function goalProgress(goal: Goal, measurements: Measurement[], workouts: Workout[], targetPerWeek: number): { current?: number; pct: number; label: string } {
-  if (!goal.metric || goal.targetValue === undefined) return { pct: 0, label: 'No target set' }
+export function goalProgress(goal: Goal, measurements: Measurement[], workouts: Workout[], targetPerWeek: number, lang: Language = getLanguage()): { current?: number; pct: number; label: string } {
+  const tr = translator(lang)
+  if (!goal.metric || goal.targetValue === undefined) return { pct: 0, label: tr.t('goalProgress.noTarget') }
   const clampPct = (v: number) => Math.max(0, Math.min(1, v))
   switch (goal.metric) {
     case 'body_weight': {
       const trend = weightTrend(measurements)
       const current = trend.current
-      if (current === undefined) return { pct: 0, label: 'Log your weight to track this' }
+      if (current === undefined) return { pct: 0, label: tr.t('goalProgress.logWeight') }
       const start = goal.startValue ?? trend.start ?? current
       const total = goal.targetValue - start
       const pct = total === 0 ? 1 : clampPct((current - start) / total)
-      return { current, pct, label: `${current} → ${goal.targetValue} ${goal.targetUnit ?? 'kg'}` }
+      return { current, pct, label: tr.t('goalProgress.weight', { current: tr.num(current), target: tr.num(goal.targetValue), unit: goal.targetUnit ?? 'kg' }) }
     }
     case 'bench_press':
     case 'squat':
@@ -246,23 +252,23 @@ export function goalProgress(goal: Goal, measurements: Measurement[], workouts: 
       const idMap = { bench_press: ['bench_press', 'db_bench_press'], squat: ['back_squat', 'front_squat', 'goblet_squat'], deadlift: ['deadlift', 'romanian_deadlift'] }
       const prs = personalRecords(workouts).filter((p) => idMap[goal.metric as keyof typeof idMap].includes(p.exerciseId))
       const current = prs[0] ? round(prs[0].e1rm) : undefined
-      if (current === undefined) return { pct: 0, label: 'No lifts logged yet' }
+      if (current === undefined) return { pct: 0, label: tr.t('goalProgress.noLifts') }
       const start = goal.startValue ?? current * 0.8
       const pct = clampPct((current - start) / (goal.targetValue - start || 1))
-      return { current, pct, label: `${current} → ${goal.targetValue} kg (est. max)` }
+      return { current, pct, label: tr.t('goalProgress.lift', { current: tr.num(current), target: tr.num(goal.targetValue) }) }
     }
     case 'workouts_per_week': {
       const streak = consistencyStreak(workouts, targetPerWeek)
       const pct = clampPct(streak.thisWeek / goal.targetValue)
-      return { current: streak.thisWeek, pct, label: `${streak.thisWeek} of ${goal.targetValue} this week` }
+      return { current: streak.thisWeek, pct, label: tr.t('goalProgress.perWeek', { current: streak.thisWeek, target: goal.targetValue }) }
     }
     case 'steps_per_day': {
       const steps = measurements.filter((m) => m.type === 'steps').slice(-7).map((m) => m.value)
       const current = steps.length ? round(avg(steps)) : undefined
-      if (current === undefined) return { pct: 0, label: 'No step data yet' }
-      return { current, pct: clampPct(current / goal.targetValue), label: `${current.toLocaleString()} avg / ${goal.targetValue.toLocaleString()}` }
+      if (current === undefined) return { pct: 0, label: tr.t('goalProgress.noSteps') }
+      return { current, pct: clampPct(current / goal.targetValue), label: tr.t('goalProgress.steps', { current: tr.int(current), target: tr.int(goal.targetValue) }) }
     }
     default:
-      return { pct: 0, label: goal.targetUnit ? `${goal.targetValue} ${goal.targetUnit}` : `${goal.targetValue}` }
+      return { pct: 0, label: goal.targetUnit ? `${tr.num(goal.targetValue)} ${goal.targetUnit}` : `${tr.num(goal.targetValue)}` }
   }
 }

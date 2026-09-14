@@ -1,9 +1,9 @@
-import { GOAL_LABELS } from '@/domain/labels'
+import { programCanonicalName, renderWorkoutTitle, titleKeyOf, splitLabel as splitLabelOf } from '@/domain/labels'
 import type { CalendarEvent, Goal, GoalType, Program, ProgramDay, ProgramWeek, UserProfile, Workout, WorkoutFocus } from '@/domain/types'
+import { t } from '@/i18n'
 import { addDays, dayKey, fromDayKey, startOfWeek } from '@/lib/dates'
 import { uid } from '@/lib/utils'
 import { chooseSplit, generateWorkout, primaryGoal, splitRotation } from './workoutGenerator'
-import { FOCUS_LABELS } from '@/domain/labels'
 
 export interface GenerateProgramInput {
   user: UserProfile
@@ -25,14 +25,6 @@ function phaseFor(week: number, total: number): ProgramWeek['phase'] {
   return 'intensify'
 }
 
-const PHASE_NOTES: Record<ProgramWeek['phase'], string> = {
-  foundation: 'Groove the movements, build the base. Leave 2–3 reps in reserve.',
-  build: 'Volume rises. Add load when every set hits the target.',
-  intensify: 'Heavier and sharper. Fewer reps in reserve, longer rest.',
-  peak: 'Express what you have built. Quality over quantity.',
-  deload: 'Recover on purpose. Lighter loads, fewer sets, same movements.',
-}
-
 function multipliers(phase: ProgramWeek['phase'], week: number): { intensity: number; volume: number } {
   switch (phase) {
     case 'foundation':
@@ -48,19 +40,9 @@ function multipliers(phase: ProgramWeek['phase'], week: number): { intensity: nu
   }
 }
 
+/** English canonical program name (stored). Screens render programDisplayName() in the user's language. */
 export function programName(goal: GoalType, weeks: number): string {
-  const names: Record<GoalType, string> = {
-    build_muscle: 'Muscle Builder',
-    lose_fat: 'Lean & Strong',
-    recomposition: 'Recomp Protocol',
-    conditioning: 'Engine Builder',
-    strength: 'Strength Foundation',
-    consistency: 'Show Up',
-    general_fitness: 'Everyday Athlete',
-    mobility: 'Move Well',
-    endurance: 'Long Road',
-  }
-  return `${weeks}-Week ${names[goal]}`
+  return programCanonicalName(goal, weeks)
 }
 
 export function generateProgram(input: GenerateProgramInput): Program {
@@ -80,14 +62,13 @@ export function generateProgram(input: GenerateProgramInput): Program {
     const m = multipliers(phase, w)
     const dayPlans: ProgramDay[] = days.map((dow, i) => {
       const focus = rotation[i % rotation.length] as WorkoutFocus
-      return { dayOfWeek: dow, focus, title: FOCUS_LABELS[focus], exerciseIds: [], minutes: user.availability.sessionMinutes }
+      return { dayOfWeek: dow, focus, title: renderWorkoutTitle({ focus }, 'en'), exerciseIds: [], minutes: user.availability.sessionMinutes }
     })
-    weeksPlan.push({ week: w, phase, intensityMultiplier: m.intensity, volumeMultiplier: m.volume, note: PHASE_NOTES[phase], days: dayPlans })
+    // Stored notes are English canonical; screens render phaseNote(phase) in the user's language.
+    weeksPlan.push({ week: w, phase, intensityMultiplier: m.intensity, volumeMultiplier: m.volume, note: t(`phaseNote.${phase}`, undefined, 'en'), days: dayPlans })
   }
 
-  const description = `${GOAL_LABELS[goal]} over ${weeks} weeks, ${daysPerWeek} days a week on a ${splitLabel(split)} split. ${
-    weeks >= 8 ? 'Every fourth week is a deload so you keep progressing.' : 'Progressive weeks with a lighter finish.'
-  }`
+  const description = t('programDesc', { goal: t(`goal.${goal}`, undefined, 'en'), weeks, days: daysPerWeek, split: splitLabelOf(split, 'en'), tail: t(weeks >= 8 ? 'programDesc.deload' : 'programDesc.short', undefined, 'en') }, 'en')
 
   return {
     id: uid('prg'),
@@ -105,8 +86,9 @@ export function generateProgram(input: GenerateProgramInput): Program {
   }
 }
 
+/** Localised split label. */
 export function splitLabel(split: Program['split']): string {
-  return { full_body: 'full-body', upper_lower: 'upper/lower', push_pull_legs: 'push/pull/legs', conditioning_hybrid: 'strength + conditioning' }[split]
+  return splitLabelOf(split)
 }
 
 function defaultDays(n: number): number[] {
@@ -142,8 +124,10 @@ export function materializeProgram(program: Program, user: UserProfile, goals: G
         source: 'program',
         program: { id: program.id, week: week.week, day: di + 1, intensity: week.intensityMultiplier, volume: week.volumeMultiplier },
       })
-      workout.title = `${day.title}`
+      workout.title = renderWorkoutTitle({ focus: day.focus }, 'en')
+      workout.titleKey = titleKeyOf({ focus: day.focus })
       workout.coachNote = week.note
+      workout.noteKey = week.phase
       workouts.push(workout)
       events.push({
         id: uid('evt'),

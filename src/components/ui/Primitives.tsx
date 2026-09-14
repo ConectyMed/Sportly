@@ -1,6 +1,7 @@
 import { ChevronRight, Minus, Plus } from 'lucide-react'
 import { motion, useReducedMotion } from 'motion/react'
 import type { InputHTMLAttributes, ReactNode } from 'react'
+import { useT } from '@/i18n/react'
 import { cn } from '@/lib/utils'
 
 /* ------------------------------------------------------------------ Coach mark */
@@ -99,17 +100,18 @@ export function TextInput({ className, ...rest }: InputHTMLAttributes<HTMLInputE
 }
 
 export function Stepper({ value, onChange, min = 0, max = 999, step = 1, unit, format }: { value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; unit?: string; format?: (v: number) => string }) {
+  const tr = useT()
   const clamp = (v: number) => Math.max(min, Math.min(max, Math.round(v / step) * step))
   return (
     <div className="inline-flex items-center gap-1 rounded-full bg-surface-2 p-1">
-      <button aria-label="Decrease" onClick={() => onChange(clamp(value - step))} className="h-9 w-9 rounded-full bg-bg-elev flex items-center justify-center text-text-2 hover:text-text">
+      <button aria-label={tr.t('common.decrease')} onClick={() => onChange(clamp(value - step))} className="h-9 w-9 rounded-full bg-bg-elev flex items-center justify-center text-text-2 hover:text-text">
         <Minus size={16} />
       </button>
       <span className="min-w-[64px] text-center text-[15px] font-semibold tabular">
         {format ? format(value) : value}
         {unit && <span className="text-text-3 font-medium text-[13px] ml-0.5">{unit}</span>}
       </span>
-      <button aria-label="Increase" onClick={() => onChange(clamp(value + step))} className="h-9 w-9 rounded-full bg-bg-elev flex items-center justify-center text-text-2 hover:text-text">
+      <button aria-label={tr.t('common.increase')} onClick={() => onChange(clamp(value + step))} className="h-9 w-9 rounded-full bg-bg-elev flex items-center justify-center text-text-2 hover:text-text">
         <Plus size={16} />
       </button>
     </div>

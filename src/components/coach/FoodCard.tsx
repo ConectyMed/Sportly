@@ -1,10 +1,12 @@
 import { ArrowRight, Camera, Minus, Plus, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
-import { confidenceLabel, rescaleItem, withItems } from '@/coach/food/foodAnalysis'
+import { confidenceLabel, foodItemName, mealDisplayName, rescaleItem, withItems } from '@/coach/food/foodAnalysis'
 import { Button } from '@/components/ui/Button'
 import { Chip, Tag } from '@/components/ui/Chip'
-import { MEAL_SLOT_LABELS } from '@/domain/labels'
+import { mealSlotLabel } from '@/domain/labels'
 import type { CoachCard, FoodItem, LoggedMeal } from '@/domain/types'
+import { useT } from '@/i18n/react'
+import type { Translator } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { userAction } from '@/coach/userActions'
 import { useStore } from '@/store/useStore'
@@ -12,10 +14,10 @@ import { useStore } from '@/store/useStore'
 const frame = 'rounded-[20px] border border-border bg-surface overflow-hidden'
 const SLOTS: Array<LoggedMeal['slot']> = ['breakfast', 'lunch', 'dinner', 'snack']
 
-function portionText(i: FoodItem): string {
+function portionText(i: FoodItem, tr: Translator): string {
   if (i.unit === 'g' || i.unit === 'ml') return `${i.grams} ${i.unit}`
-  const unit = i.unit === 'piece' ? '' : ` ${i.unit}${i.quantity === 1 ? '' : 's'}`
-  return `${Number.isInteger(i.quantity) ? i.quantity : i.quantity.toFixed(1)}${unit} · ${i.grams} g`
+  const unit = i.unit === 'piece' ? '' : ` ${tr.tn(`foodUnit.${i.unit}`, i.quantity)}`
+  return `${Number.isInteger(i.quantity) ? i.quantity : tr.num(i.quantity)}${unit} · ${i.grams} ${tr.t('common.g')}`
 }
 
 /**
@@ -24,6 +26,7 @@ function portionText(i: FoodItem): string {
  */
 export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text: string) => void }) {
   const navigate = useNavigate()
+  const tr = useT()
   const meal = useStore((s) => (card.refId ? s.meals[card.refId] : undefined))
   // Edits go through the same tools the coach uses (validated, audited, never duplicated).
   const upsertMeal = (m: LoggedMeal) => userAction({ type: 'update_meal', meal: m })
@@ -31,7 +34,7 @@ export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text
   const activeConversationId = useStore((s) => s.activeConversationId)
   const updateConversationContext = useStore((s) => s.updateConversationContext)
 
-  if (!meal) return <div className={cn(frame, 'p-4 text-[13px] text-text-3')}>This meal was removed.</div>
+  if (!meal) return <div className={cn(frame, 'p-4 text-[13px] text-text-3')}>{tr.t('coachScreen.mealRemoved')}</div>
 
   const draft = meal.status === 'draft'
   const conf = confidenceLabel(meal.confidence)
@@ -58,7 +61,7 @@ export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text
   }
   const commit = () => {
     focus()
-    if (onSend) onSend(`Add it to ${MEAL_SLOT_LABELS[meal.slot].toLowerCase()}`)
+    if (onSend) onSend(`${tr.t('coachScreen.addIt')} ${tr.t(`slotTo.${meal.slot}`)}`)
     else upsertMeal({ ...meal, status: 'logged', updatedAt: new Date().toISOString() })
   }
   const discard = () => {
@@ -79,50 +82,62 @@ export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text
           )}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between gap-2">
-              <span className="label">{draft ? 'Estimated meal' : `Logged · ${MEAL_SLOT_LABELS[meal.slot]}`}</span>
-              <Tag tone={conf === 'high' ? 'accent' : conf === 'medium' ? 'default' : 'warn'}>{conf} confidence</Tag>
+              <span className="label">{draft ? tr.t('coachScreen.estimatedMeal') : tr.t('coachScreen.loggedSlot', { slot: mealSlotLabel(meal.slot) })}</span>
+              <Tag tone={conf === 'high' ? 'accent' : conf === 'medium' ? 'default' : 'warn'}>{tr.t('common.confidence', { level: tr.t(`common.confidence.${conf}`) })}</Tag>
             </div>
-            <div className="title text-[18px] mt-0.5 truncate">{meal.name}</div>
-            <div className="text-[12px] text-text-3 mt-0.5">{meal.analysis === 'vision' ? 'From your photo' : meal.analysis === 'manual' ? 'Entered by you' : 'Estimated from your description'}</div>
+            <div className="title text-[18px] mt-0.5 truncate">{mealDisplayName(meal)}</div>
+            <div className="text-[12px] text-text-3 mt-0.5">{meal.analysis === 'vision' ? tr.t('coachScreen.fromPhoto') : meal.analysis === 'manual' ? tr.t('coachScreen.enteredByYou') : tr.t('coachScreen.fromDescription')}</div>
           </div>
         </div>
 
         <ul className="mt-3 space-y-1.5">
-          {meal.items.map((i) => (
-            <li key={i.id} className="flex items-center gap-2 text-[14px]">
-              <div className="flex-1 min-w-0">
-                <div className="truncate">{i.name}</div>
-                <div className="text-[12px] text-text-3 tabular">
-                  {portionText(i)} · {i.calories} kcal · {i.proteinG} g P
+          {meal.items.map((i) => {
+            const name = foodItemName(i)
+            return (
+              <li key={i.id} className="flex items-center gap-2 text-[14px]">
+                <div className="flex-1 min-w-0">
+                  <div className="truncate">{name}</div>
+                  <div className="text-[12px] text-text-3 tabular">
+                    {portionText(i, tr)} · {i.calories} {tr.t('common.kcal')} · {i.proteinG} {tr.t('common.g')} {tr.t('common.proteinShort')}
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <button aria-label={`Less ${i.name}`} onClick={() => scaleItem(i, 0.75)} className="h-7 w-7 rounded-full bg-surface-2 text-text-2 hover:text-text flex items-center justify-center">
-                  <Minus size={13} />
-                </button>
-                <button aria-label={`More ${i.name}`} onClick={() => scaleItem(i, 1.33)} className="h-7 w-7 rounded-full bg-surface-2 text-text-2 hover:text-text flex items-center justify-center">
-                  <Plus size={13} />
-                </button>
-                <button aria-label={`Remove ${i.name}`} onClick={() => removeItem(i)} className="h-7 w-7 rounded-full text-text-4 hover:text-danger flex items-center justify-center">
-                  <X size={13} />
-                </button>
-              </div>
-            </li>
-          ))}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button aria-label={tr.t('coachScreen.less', { name })} onClick={() => scaleItem(i, 0.75)} className="h-7 w-7 rounded-full bg-surface-2 text-text-2 hover:text-text flex items-center justify-center">
+                    <Minus size={13} />
+                  </button>
+                  <button aria-label={tr.t('coachScreen.moreOf', { name })} onClick={() => scaleItem(i, 1.33)} className="h-7 w-7 rounded-full bg-surface-2 text-text-2 hover:text-text flex items-center justify-center">
+                    <Plus size={13} />
+                  </button>
+                  <button aria-label={tr.t('coachScreen.removeItem', { name })} onClick={() => removeItem(i)} className="h-7 w-7 rounded-full text-text-4 hover:text-danger flex items-center justify-center">
+                    <X size={13} />
+                  </button>
+                </div>
+              </li>
+            )
+          })}
         </ul>
 
         <div className="flex items-baseline gap-3 mt-3 pt-3 border-t border-border">
-          <span className="title text-[22px] tabular">{meal.calories.toLocaleString()}</span>
-          <span className="text-[12px] text-text-2">kcal</span>
+          <span className="title text-[22px] tabular">{tr.int(meal.calories)}</span>
+          <span className="text-[12px] text-text-2">{tr.t('common.kcal')}</span>
           <span className="ml-auto flex gap-3 text-[12.5px] tabular text-text-2">
             <span>
-              <b className="font-semibold text-text">{meal.proteinG} g</b> P
+              <b className="font-semibold text-text">
+                {meal.proteinG} {tr.t('common.g')}
+              </b>{' '}
+              {tr.t('common.proteinShort')}
             </span>
             <span>
-              <b className="font-semibold text-text">{meal.carbsG} g</b> C
+              <b className="font-semibold text-text">
+                {meal.carbsG} {tr.t('common.g')}
+              </b>{' '}
+              {tr.t('common.carbsShort')}
             </span>
             <span>
-              <b className="font-semibold text-text">{meal.fatG} g</b> F
+              <b className="font-semibold text-text">
+                {meal.fatG} {tr.t('common.g')}
+              </b>{' '}
+              {tr.t('common.fatShort')}
             </span>
           </span>
         </div>
@@ -132,7 +147,7 @@ export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text
           <div className="flex gap-1.5 mt-3 overflow-x-auto no-scrollbar">
             {SLOTS.map((s) => (
               <Chip key={s} size="sm" selected={meal.slot === s} onClick={() => setSlot(s)}>
-                {MEAL_SLOT_LABELS[s]}
+                {mealSlotLabel(s)}
               </Chip>
             ))}
           </div>
@@ -142,15 +157,15 @@ export function FoodCardView({ card, onSend }: { card: CoachCard; onSend?: (text
         {draft ? (
           <>
             <Button size="sm" variant="primary" full onClick={commit}>
-              Add to {MEAL_SLOT_LABELS[meal.slot].toLowerCase()}
+              {tr.t('coachScreen.addTo', { slot: tr.t(`slotTo.${meal.slot}`) })}
             </Button>
             <Button size="sm" variant="secondary" onClick={discard}>
-              Discard
+              {tr.t('coachScreen.discard')}
             </Button>
           </>
         ) : (
           <Button size="sm" variant="secondary" full onClick={() => navigate('/nutrition')} iconRight={<ArrowRight size={14} />}>
-            Today’s intake
+            {tr.t('coachScreen.todaysIntake')}
           </Button>
         )}
       </div>
