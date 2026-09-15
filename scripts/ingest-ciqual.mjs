@@ -48,8 +48,8 @@ export const CIQUAL_ATTRIBUTION = 'Source : Anses. Table de composition nutritio
 // rename or renumbering fails the run rather than filling a column with the
 // wrong nutrient. `required` ones are what the macro calculator reads.
 const CONSTITUENTS = [
-  { column: 'energy_kcal', expectCode: 327, required: true, match: /^energie, reglement ue n. ?1169\/2011 \(kcal\/100 ?g\)/ },
-  { column: 'energy_kj', expectCode: 328, required: false, match: /^energie, reglement ue n. ?1169\/2011 \(kj\/100 ?g\)/ },
+  { column: 'energy_kcal', expectCode: 328, required: true, match: /^energie, reglement ue n. ?1169\/2011 \(kcal\/100 ?g\)/ },
+  { column: 'energy_kj', expectCode: 327, required: false, match: /^energie, reglement ue n. ?1169\/2011 \(kj\/100 ?g\)/ },
   // Protein as N × 6.25 is the definition Regulation 1169/2011 (and every
   // product label, hence Open Food Facts) uses; Ciqual also publishes the
   // Jones-factor figure, which is not comparable across sources.
@@ -226,18 +226,27 @@ function buildSnapshot(xml) {
   }
 
   // Constituent codes, resolved by name and cross-checked against the code.
+  // Every problem is collected before failing, so one run shows the whole
+  // mapping against the whole table.
   const codes = {}
+  const problems = []
   for (const c of CONSTITUENTS) {
     const hits = consts.filter((r) => c.match.test(fold(field(r, 'const_nom_fr', 'const_nom') ?? '')))
     if (hits.length !== 1) {
       const msg = `constituent for ${c.column} matched ${hits.length} rows (${hits.map((h) => `${field(h, 'const_code')}: ${field(h, 'const_nom_fr')}`).join(' | ')})`
-      if (c.required) fail(`${msg}\nconstituent table:\n${consts.map((r) => `  ${field(r, 'const_code')}\t${field(r, 'const_nom_fr')}`).join('\n')}`)
-      log(`warning: ${msg}; column left empty`)
+      if (c.required) problems.push(msg)
+      else log(`warning: ${msg}; column left empty`)
       continue
     }
     const code = Number(field(hits[0], 'const_code'))
-    if (code !== c.expectCode) fail(`constituent ${c.column} is code ${code} in this table, expected ${c.expectCode} ("${field(hits[0], 'const_nom_fr')}"). Check the mapping before loading.`)
+    if (code !== c.expectCode) {
+      problems.push(`constituent ${c.column} is code ${code} in this table, expected ${c.expectCode} ("${field(hits[0], 'const_nom_fr')}")`)
+      continue
+    }
     codes[c.column] = code
+  }
+  if (problems.length) {
+    fail(`${problems.join('\n')}\nCheck the mapping before loading. Constituent table:\n${consts.map((r) => `  ${field(r, 'const_code')}\t${field(r, 'const_nom_fr')}`).join('\n')}`)
   }
   log(`constituent codes: ${JSON.stringify(codes)}`)
 
