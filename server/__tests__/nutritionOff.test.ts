@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { lookupBarcode, mapOffResponse, normalizeBarcode, OFF_API_FIELDS, OFF_CACHE_TTL_MS, OFF_NOT_FOUND_TTL_MS, OFF_USER_AGENT } from '../nutrition/off.js'
-import { fakeOffFetch, OFF_V2_NOT_FOUND, OFF_V2_SPREAD, offSpread, stubStore } from './nutritionHelpers.js'
+import { fakeOffFetch, OFF_V2_NOT_FOUND, OFF_V2_SPREAD, OFF_V2_WATER, offSpread, stubStore } from './nutritionHelpers.js'
 
 const T0 = Date.parse('2026-01-01T00:00:00.000Z')
 const at = (ms: number) => () => new Date(ms)
@@ -19,14 +19,22 @@ describe('normalizeBarcode', () => {
 })
 
 describe('mapOffResponse', () => {
-  it('maps a v2 product to a cache row, lifting the per-100 g figures and keeping the raw nutriments', () => {
+  it('maps a real v2 product to a cache row, lifting the per-100 g figures and keeping the raw nutriments', () => {
     const row = mapOffResponse('3017624010701', 200, OFF_V2_SPREAD, '2026-01-01T00:00:00.000Z')
     expect(row).toMatchObject({
-      barcode: '3017624010701', status: 'found', productName: 'Nutella', brands: 'Ferrero', quantity: '400 g', servingSize: '15 g', servingQuantityG: 15,
-      per100g: { kcal: 539, kj: 2252, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.107 },
-      lastModifiedT: 1700000000, productUrl: 'https://world.openfoodfacts.org/product/3017624010701', httpStatus: 200,
+      barcode: '3017624010701', status: 'found', productName: 'Nutella', productNameFr: null, brands: 'Ferrero', quantity: '400.0 g', servingSize: null, servingQuantityG: null,
+      per100g: { kcal: 539, kj: 2227.9, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.1075 },
+      lastModifiedT: 1785948506, productUrl: 'https://world.openfoodfacts.org/product/3017624010701', httpStatus: 200,
     })
     expect(row.nutriments).toEqual(OFF_V2_SPREAD.product.nutriments)
+  })
+
+  it('keeps every macro null for a product OFF has none for, and takes its serving', () => {
+    const row = mapOffResponse('3274080005003', 200, OFF_V2_WATER, '2026-01-01T00:00:00.000Z')
+    expect(row).toMatchObject({
+      status: 'found', productName: 'isabelle', productNameFr: 'isabelle', brands: 'Cristaline', servingSize: '1,5L', servingQuantityG: 1500,
+      per100g: { kcal: null, kj: null, proteinG: null, carbsG: null, sugarsG: null, fatG: null, saturatedFatG: null, fibreG: null, saltG: 0.00275 },
+    })
   })
 
   it('converts kJ to kcal when OFF has only kJ — a unit conversion, not a guess', () => {

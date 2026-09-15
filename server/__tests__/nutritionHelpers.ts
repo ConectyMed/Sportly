@@ -70,12 +70,12 @@ export const sportlyEgg: SportlyFoodInput = {
   aliases: ['eggs', 'oeuf', 'œufs', 'boiled egg'],
 }
 
-/** A found product row as `mapOffResponse` would produce it for a hazelnut spread. */
+/** A found product row as `mapOffResponse` produces it for OFF_V2_SPREAD below. */
 export const offSpread: OffProductRow = {
-  barcode: '3017624010701', status: 'found', productName: 'Nutella', productNameFr: 'Nutella', brands: 'Ferrero', quantity: '400 g',
-  servingSize: '15 g', servingQuantityG: 15,
-  per100g: { kcal: 539, kj: 2252, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.107 },
-  nutriments: { 'energy-kcal_100g': 539, proteins_100g: 6.3 }, lastModifiedT: 1700000000, productUrl: 'https://world.openfoodfacts.org/product/3017624010701',
+  barcode: '3017624010701', status: 'found', productName: 'Nutella', productNameFr: null, brands: 'Ferrero', quantity: '400.0 g',
+  servingSize: null, servingQuantityG: null,
+  per100g: { kcal: 539, kj: 2227.9, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.1075 },
+  nutriments: { 'energy-kcal_100g': 539, proteins_100g: 6.3 }, lastModifiedT: 1785948506, productUrl: 'https://world.openfoodfacts.org/product/3017624010701',
   fetchedAt: '2026-01-01T00:00:00.000Z', httpStatus: 200,
 }
 
@@ -93,25 +93,51 @@ export function fakeOffFetch(answers: Record<string, { status: number; body?: un
   return Object.assign(f, { calls })
 }
 
-/** The Open Food Facts v2 shape, cut down to the fields we request. */
+/**
+ * Real Open Food Facts v2 answers, as returned to scripts/off-lookup.mjs on
+ * 2026-09-15 for the fields we request (nutriments trimmed to the keys that
+ * matter). A hazelnut spread with full macros and no serving; a mineral water
+ * with a serving and no macros at all; an invalid code.
+ */
 export const OFF_V2_SPREAD = {
   code: '3017624010701',
+  product: {
+    brands: 'Ferrero',
+    code: '3017624010701',
+    last_modified_t: 1785948506,
+    nutriments: {
+      carbohydrates_100g: 57.5, energy: 2227.9, 'energy-kcal': 539, 'energy-kcal_100g': 539, 'energy-kcal_unit': 'kcal', 'energy-kj_100g': 2227.9, energy_100g: 2227.9, energy_unit: 'kJ',
+      fat_100g: 30.9, proteins_100g: 6.3, salt_100g: 0.1075, 'saturated-fat_100g': 10.6, sodium_100g: 0.043, sugars_100g: 56.3,
+    },
+    nutrition_data_per: '100g',
+    product_name: 'Nutella',
+    product_quantity: 400,
+    product_quantity_unit: 'g',
+    quantity: '400.0 g',
+  },
   status: 1,
   status_verbose: 'product found',
-  product: {
-    product_name: 'Nutella',
-    product_name_fr: 'Nutella',
-    brands: 'Ferrero',
-    quantity: '400 g',
-    serving_size: '15 g',
-    serving_quantity: '15',
-    serving_quantity_unit: 'g',
-    last_modified_t: 1700000000,
-    nutriments: {
-      'energy-kcal_100g': 539, 'energy-kj_100g': 2252, energy_100g: 2252, proteins_100g: 6.3, carbohydrates_100g: 57.5, sugars_100g: 56.3,
-      fat_100g: 30.9, 'saturated-fat_100g': 10.6, salt_100g: 0.107, sodium_100g: 0.0428,
-    },
-  },
 }
 
-export const OFF_V2_NOT_FOUND = { code: '0000000000000', status: 0, status_verbose: 'product not found' }
+export const OFF_V2_WATER = {
+  code: '3274080005003',
+  product: {
+    brands: 'Cristaline',
+    code: '3274080005003',
+    last_modified_t: 1789228158,
+    nutriments: { bicarbonate_100g: 0.435, calcium_100g: 0.113, magnesium_100g: 0.028, salt_100g: 0.00275, sodium_100g: 0.0063, ph_100g: 7.3 },
+    nutrition_data_per: '100g',
+    product_name: 'isabelle',
+    product_name_fr: 'isabelle',
+    product_quantity: 1500,
+    product_quantity_unit: 'ml',
+    quantity: '1500 ml',
+    serving_quantity: 1500,
+    serving_quantity_unit: 'ml',
+    serving_size: '1,5L',
+  },
+  status: 1,
+  status_verbose: 'product found',
+}
+
+export const OFF_V2_NOT_FOUND = { code: '00000000', status: 0, status_verbose: 'no code or invalid code' }

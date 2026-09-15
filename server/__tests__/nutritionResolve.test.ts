@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { resolveFood } from '../nutrition/resolve.js'
-import { ciqualApple, fakeOffFetch, OFF_V2_NOT_FOUND, OFF_V2_SPREAD, offSpread, sportlyEgg, stubStore } from './nutritionHelpers.js'
+import { ciqualApple, fakeOffFetch, OFF_V2_NOT_FOUND, OFF_V2_SPREAD, OFF_V2_WATER, offSpread, sportlyEgg, stubStore } from './nutritionHelpers.js'
 import { SUBJECT_A, SUBJECT_B } from './helpers.js'
 
 /**
@@ -98,7 +98,11 @@ describe('resolveFood — attribution', () => {
       url: 'https://world.openfoodfacts.org/product/3017624010701', required: true,
     })
     expect(r.status === 'resolved' && r.food.per100g).toEqual({ kcal: 539, proteinG: 6.3, carbsG: 57.5, fatG: 30.9, fibreG: null })
-    expect(r.status === 'resolved' && r.food.typicalPortion).toEqual({ grams: 15, unit: 'serving', label: '15 g' })
+    // No serving on this product: no typical portion, rather than an invented one.
+    expect(r.status === 'resolved' && r.food.typicalPortion).toBeNull()
+
+    const water = await resolveFood({ barcode: '3274080005003' }, { store, fetch: fakeOffFetch({ '3274080005003': { status: 200, body: OFF_V2_WATER } }) })
+    expect(water.status === 'resolved' && water.food).toMatchObject({ name: 'isabelle', brand: 'Cristaline', per100g: { kcal: null, proteinG: null, carbsG: null, fatG: null, fibreG: null }, typicalPortion: { grams: 1500, unit: 'serving', label: '1,5L' } })
   })
 
   it('a Ciqual food carries the ANSES credit naming the table version, under Licence Ouverte', async () => {

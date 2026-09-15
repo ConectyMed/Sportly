@@ -74,12 +74,12 @@ describePostgres('postgres nutrition', ({ pool, sql }) => {
     expect(second).toMatchObject({ status: 'found', fromCache: true, stale: false })
     expect(fetch.calls).toHaveLength(1)
 
-    const row = (await pool.query(`select status, product_name, brands, energy_kcal_100g, protein_g_100g, fibre_g_100g, serving_quantity_g, nutriments->>'sugars_100g' as sugars, fetched_at from off.products where barcode = $1`, ['3017624010701'])).rows[0]
-    expect(row).toMatchObject({ status: 'found', product_name: 'Nutella', brands: 'Ferrero', energy_kcal_100g: '539.000', protein_g_100g: '6.300', fibre_g_100g: null, serving_quantity_g: '15.000', sugars: '56.3' })
+    const row = (await pool.query(`select status, product_name, brands, energy_kcal_100g, protein_g_100g, fibre_g_100g, salt_g_100g, serving_quantity_g, nutriments->>'sugars_100g' as sugars, fetched_at from off.products where barcode = $1`, ['3017624010701'])).rows[0]
+    expect(row).toMatchObject({ status: 'found', product_name: 'Nutella', brands: 'Ferrero', energy_kcal_100g: '539.0000', protein_g_100g: '6.3000', fibre_g_100g: null, salt_g_100g: '0.1075', serving_quantity_g: null, sugars: '56.3' })
     expect(new Date(row.fetched_at as string).toISOString()).toBe(T0.toISOString())
 
-    // The row comes back through the port as numbers, with null still null.
-    expect(second.status === 'found' && second.product.per100g).toEqual({ kcal: 539, kj: 2252, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.107 })
+    // The row comes back through the port as numbers, with null still null and OFF's four decimals intact.
+    expect(second.status === 'found' && second.product.per100g).toEqual({ kcal: 539, kj: 2227.9, proteinG: 6.3, carbsG: 57.5, sugarsG: 56.3, fatG: 30.9, saturatedFatG: 10.6, fibreG: null, saltG: 0.1075 })
   })
 
   it('caches a not-found barcode as an empty row, which the constraint keeps empty', async () => {
