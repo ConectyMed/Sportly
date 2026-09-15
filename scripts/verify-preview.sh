@@ -14,9 +14,13 @@
 #
 # Environment:
 #   SPORTLY_DATABASE_URL        Postgres URL of the preview's database. Needed for the
-#                               database half of checks 3 and 4. Never printed. Without
-#                               it those checks are reported as FAIL (not verified) and
-#                               the SQL to run by hand is printed instead.
+#                               database half of checks 3 and 4, which run through
+#                               scripts/verify-preview-db.mjs: @neondatabase/serverless
+#                               for a Neon URL, node-postgres for any other, both already
+#                               in package.json. Never printed. Without it those checks
+#                               are reported as FAIL (not verified) and the SQL to run by
+#                               hand — plain SQL, values filled in, ready for Neon's SQL
+#                               editor — is printed instead.
 #   VERCEL_PROTECTION_BYPASS    Optional. Sent as x-vercel-protection-bypass if the
 #                               preview has deployment protection on.
 #   ROUTE                       Budget route to exercise. Default: coaching.
@@ -30,7 +34,8 @@
 #
 # Mint is rate limited to 5 attempts per client IP per hour. Each run uses 2.
 #
-# Requires: bash, curl, and jq or python3. psql for the database checks.
+# Requires: bash, curl, and jq or python3. node (with `pnpm install` done) for the
+# database checks; no psql.
 
 set -euo pipefail
 
@@ -42,6 +47,11 @@ fi
 BASE_URL="${BASE_URL%/}"
 ROUTE="${ROUTE:-coaching}"
 CAP_USD="${CAP_USD:-1.00}"
+case "$ROUTE" in food_scan|coaching|program) ;; *) echo "ROUTE must be food_scan, coaching or program; got '$ROUTE'" >&2; exit 2 ;; esac
+case "$CAP_USD" in ''|*[!0-9.]*|.*|*.|*.*.*) echo "CAP_USD must be a plain decimal number, e.g. 1.00; got '$CAP_USD'" >&2; exit 2 ;; esac
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_RUNNER="$SCRIPT_DIR/verify-preview-db.mjs"
 
 MINT_PATH="/api/identity/token"
 CALL_PATH="/api/model/call"
@@ -108,73 +118,36 @@ describe_resp() {
 }
 
 # ---- database access ---------------------------------------------------------
+#
+# Every database statement goes through scripts/verify-preview-db.mjs, which
+# reads SPORTLY_DATABASE_URL from the environment itself. The URL is never put
+# on a command line and never echoed; on an error the runner prints the driver's
+# message with the URL, password, user, host and database name blanked out.
 
 DB_OK=0
-if [ -n "${SPORTLY_DATABASE_URL:-}" ] && command -v psql >/dev/null 2>&1; then
+if [ -n "${SPORTLY_DATABASE_URL:-}" ] && command -v node >/dev/null 2>&1; then
   DB_OK=1
 elif [ -n "${SPORTLY_DATABASE_URL:-}" ]; then
-  echo "note: SPORTLY_DATABASE_URL is set but psql is not on PATH; database checks cannot run" >&2
+  echo "note: SPORTLY_DATABASE_URL is set but node is not on PATH; database checks cannot run" >&2
 else
   echo "note: SPORTLY_DATABASE_URL is not set; database checks cannot run" >&2
 fi
 
-# db <sql>  -> runs SQL with :subject, :route, :cap bound as psql variables.
-# The URL is passed only as an argument to psql; it is never echoed.
-db() {
-  psql "$SPORTLY_DATABASE_URL" -X -q -At -v ON_ERROR_STOP=1 \
-    -v subject="$SUBJECT" -v route="$ROUTE" -v cap="$CAP_USD" -f - <<<"$1"
-}
-
 # One line: log_rows|error_rows|provider_unavailable_rows|not_impl_rows|holds|held_usd|committed_usd
-db_state() {
-  db "
-select
-  (select count(*) from sportly_model_call_log where subject_id = :'subject'::uuid) as log_rows,
-  (select count(*) from sportly_model_call_log where subject_id = :'subject'::uuid and outcome = 'error') as error_rows,
-  (select count(*) from sportly_model_call_log where subject_id = :'subject'::uuid and error_category = 'PROVIDER_UNAVAILABLE') as pu_rows,
-  (select count(*) from sportly_model_call_log where subject_id = :'subject'::uuid and provider = 'not_implemented') as ni_rows,
-  (select count(*) from sportly_spend_hold where subject_id = :'subject'::uuid) as holds,
-  (select coalesce(sum(held_usd), 0) from sportly_spend_bucket where subject_id = :'subject'::uuid) as held_usd,
-  (select coalesce(sum(committed_usd), 0) from sportly_spend_bucket where subject_id = :'subject'::uuid and route = :'route' and day = (now() at time zone 'utc')::date) as committed_usd;
-"
-}
+db_state() { node "$DB_RUNNER" state "$SUBJECT" "$ROUTE" "$CAP_USD"; }
 
-SQL_SET_CAP="
--- Set committed spend for this subject/route/today (UTC) to exactly the cap.
--- The gate admits while held_usd + committed_usd < cap, so this blocks the next call.
-insert into sportly_spend_bucket (subject_id, route, day, held_usd, committed_usd)
-values (:'subject'::uuid, :'route', (now() at time zone 'utc')::date, 0, :'cap'::numeric)
-on conflict (subject_id, route, day) do update
-  set committed_usd = excluded.committed_usd;
-"
+# Set committed spend for subject/route/today (UTC) to exactly the cap, so the next call is refused.
+db_set_cap() { node "$DB_RUNNER" set-cap "$SUBJECT" "$ROUTE" "$CAP_USD"; }
 
 print_manual_sql() {
-  cat <<SQL
-
----- SQL to run by hand (replace the three placeholders) ----------------------
--- subject: $SUBJECT   route: $ROUTE   cap: $CAP_USD
-\\set subject '$SUBJECT'
-\\set route '$ROUTE'
-\\set cap '$CAP_USD'
-
--- Inspect this subject's rows:
-select route, day, held_usd, committed_usd
-  from sportly_spend_bucket where subject_id = :'subject'::uuid;
-select hold_id, route, day, hold_usd, taken_at
-  from sportly_spend_hold where subject_id = :'subject'::uuid;
-select id, ts, route, provider, model, outcome, error_category, retry_count, cost_usd, request_id
-  from sportly_model_call_log where subject_id = :'subject'::uuid order by id;
-$SQL_SET_CAP
--- After the 402, re-run the three inspect queries: the log row count must not
--- have grown and sportly_spend_hold must still have no row for the subject.
-
--- Optional cleanup of the test subject:
--- delete from sportly_model_call_log where subject_id = :'subject'::uuid;
--- delete from sportly_spend_hold      where subject_id = :'subject'::uuid;
--- delete from sportly_spend_bucket    where subject_id = :'subject'::uuid;
--- delete from sportly_subject         where subject_id = :'subject'::uuid;
-------------------------------------------------------------------------------
-SQL
+  echo
+  echo "---- SQL to run by hand ------------------------------------------------------"
+  if command -v node >/dev/null 2>&1; then
+    node "$DB_RUNNER" sql "$SUBJECT" "$ROUTE" "$CAP_USD"
+  else
+    echo "(node is not on PATH; run: node scripts/verify-preview-db.mjs sql $SUBJECT $ROUTE $CAP_USD)"
+  fi
+  echo "------------------------------------------------------------------------------"
 }
 
 # ---- checks ------------------------------------------------------------------
@@ -231,7 +204,7 @@ if [ "$DB_OK" = 1 ]; then
     fi
     LOG_ROWS_BEFORE="$LOG_ROWS"
   else
-    fail "3a/3b. database state after the stub call" "psql query failed (see output above)"
+    fail "3a/3b. database state after the stub call" "database query failed (see output above)"
     LOG_ROWS_BEFORE=""
   fi
 else
@@ -240,7 +213,7 @@ else
 fi
 
 # 4. cap at its limit
-if [ "$DB_OK" = 1 ] && db "$SQL_SET_CAP" >/dev/null; then
+if [ "$DB_OK" = 1 ] && db_set_cap; then
   req "$CALL_PATH" "$CALL_BODY" "$TOKEN"
   if [ "$HTTP_CODE" = "402" ] && [ "$(jget .error.code "$RESP")" = "BUDGET_EXCEEDED" ]; then
     pass "4. call with committed spend at the cap -> 402 BUDGET_EXCEEDED (capUsd=$(jget .error.detail.capUsd "$RESP") spentUsd=$(jget .error.detail.spentUsd "$RESP"))"
@@ -260,7 +233,7 @@ if [ "$DB_OK" = 1 ] && db "$SQL_SET_CAP" >/dev/null; then
       fail "4b. no hold after the 402" "holds=$HOLDS held_usd=$HELD committed_usd=$COMMITTED"
     fi
   else
-    fail "4a/4b. database state after the 402" "psql query failed (see output above)"
+    fail "4a/4b. database state after the 402" "database query failed (see output above)"
   fi
 else
   fail "4. call with committed spend at the cap -> 402 BUDGET_EXCEEDED" "not run: needs database access to set committed spend"
