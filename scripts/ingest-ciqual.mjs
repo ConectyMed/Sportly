@@ -339,6 +339,27 @@ async function getJson(url) {
   return res.json()
 }
 
+/**
+ * One file, on its own connection, with a few retries: the Dataverse closes a
+ * kept-alive socket after serving a large file, and the next request on it
+ * fails with "other side closed" rather than being re-sent.
+ */
+async function download(url, attempts = 4) {
+  let lastErr
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      const res = await fetch(url, { headers: { connection: 'close' } })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return Buffer.from(await res.arrayBuffer())
+    } catch (err) {
+      lastErr = err
+      log(`  attempt ${i} failed: ${err instanceof Error ? err.message : String(err)}${i < attempts ? ', retrying' : ''}`)
+      if (i < attempts) await new Promise((r) => setTimeout(r, 1000 * 2 ** (i - 1)))
+    }
+  }
+  return fail(`GET ${url}: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`)
+}
+
 async function fetchOfficial() {
   log(`dataset: ${CIQUAL_DATASET_URL}`)
   const ds = await getJson(`${CIQUAL_DATAVERSE}/api/datasets/:persistentId/?persistentId=${CIQUAL_DOI}`)
@@ -354,17 +375,16 @@ async function fetchOfficial() {
   log(`version ${version.versionNumber ?? '?'}.${version.versionMinorNumber ?? '?'}, released ${version.releaseTime ?? '?'}, licence ${JSON.stringify(version.license ?? version.termsOfUse ?? null)}`)
   for (const f of files) log(`  file ${f.id}  ${f.filename}  ${f.contentType}  ${f.filesize} bytes  ${f.checksum ?? ''}`)
 
-  // Prefer the XML distribution (a zip, or loose XML files); fall back to any zip.
-  const wanted = files.filter((f) => /\.xml$/i.test(f.filename) || /xml/i.test(f.filename) || /\.zip$/i.test(f.filename))
-  if (!wanted.length) fail('no XML or zip file in the dataset; see the listing above')
+  // Only the three XML tables the snapshot is built from (alim, compo, const),
+  // as loose files when the dataset lists them, else any zip that may hold them.
+  const loose = files.filter((f) => FILE_KINDS.some((k) => k.match.test(f.filename)))
+  const wanted = loose.length ? loose : files.filter((f) => /\.zip$/i.test(f.filename))
+  if (!wanted.length) fail('no alim/compo/const XML file and no zip in the dataset; see the listing above')
   const inputs = new Map()
   const used = []
   for (const f of wanted) {
-    const url = `${CIQUAL_DATAVERSE}/api/access/datafile/${f.id}?format=original`
     log(`downloading ${f.filename} …`)
-    const res = await fetch(url)
-    if (!res.ok) fail(`GET ${url} -> HTTP ${res.status}`)
-    const bytes = Buffer.from(await res.arrayBuffer())
+    const bytes = await download(`${CIQUAL_DATAVERSE}/api/access/datafile/${f.id}?format=original`)
     log(`  ${bytes.length} bytes`)
     inputs.set(f.filename, bytes)
     used.push(f)

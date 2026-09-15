@@ -81,16 +81,16 @@ export const offSpread: OffProductRow = {
 
 /** A fetch stub that answers from a table of {status, body} by barcode and counts calls. */
 export function fakeOffFetch(answers: Record<string, { status: number; body?: unknown } | Error>): OffFetch & { calls: string[] } {
-  const f = (async (url: string) => {
-    f.calls.push(url)
+  const calls: string[] = []
+  const f: OffFetch = async (url) => {
+    calls.push(url)
     const barcode = /product\/(\d+)/.exec(url)?.[1] ?? ''
     const answer = answers[barcode]
     if (!answer) throw new Error(`no fake answer for ${barcode}`)
     if (answer instanceof Error) throw answer
     return { status: answer.status, text: async () => (answer.body === undefined ? '' : JSON.stringify(answer.body)) }
-  }) as OffFetch & { calls: string[] }
-  f.calls = []
-  return f
+  }
+  return Object.assign(f, { calls })
 }
 
 /** The Open Food Facts v2 shape, cut down to the fields we request. */
