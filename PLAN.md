@@ -80,7 +80,7 @@
    corrections scoped by `subject_id`).
 3. **Ciqual comes from the official source.** `scripts/ingest-ciqual.mjs fetch` reads the
    ANSES dataset on Recherche Data Gouv (doi:10.57745/RDMHWY, files `alim/compo/const_2025_11_03.xml`),
-   resolves each constituent by *name* and cross-checks its code (energy 327, protein N×6.25
+   resolves each constituent by *name* and cross-checks its code (EU energy kcal 328, protein N×6.25
    25003, carbs 31000, fat 40000, fibre 34100, …; a rename fails the run), and writes a
    committed snapshot `data/ciqual/ciqual-2025.csv` + `.meta.json` with DOI, checksums,
    licence and attribution. `apply` loads the snapshot; CI and production load the same
