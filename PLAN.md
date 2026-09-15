@@ -112,3 +112,11 @@
    `scripts/off-lookup.mjs` is the live smoke check, run by the data workflow.
 9. Deliberately out of scope: composed-dish components, confidence, meal drafts. They belong
    to the scan session; the schema leaves room (`kind`, `subject_id`, `ciqual_alim_code`).
+10. **Tests cannot fail the production build.** Vercel runs `pnpm build`, which starts with
+    `tsc -b` over tsconfig.json's references (app, node, server). Those now exclude
+    `server/__tests__` and `src/**/__tests__`; the suites are typechecked by their own
+    programs, `tsconfig.server-tests.json` and `tsconfig.app-tests.json`, through
+    `pnpm typecheck` (= `tsc -b && pnpm typecheck:tests`), which is what CI runs. Proven by
+    breaking a test file in each tree: `pnpm build` exit 0, `pnpm typecheck` exit 2 naming the
+    file; then reverted. `check-api-esm-load` and `off-lookup` emit with tsconfig.server.json,
+    so they stop compiling tests too.

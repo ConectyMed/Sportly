@@ -24,5 +24,7 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  /* Same split as tsconfig.server.json: tests live in tsconfig.app-tests.json. */
+  "exclude": ["src/**/__tests__"]
 }

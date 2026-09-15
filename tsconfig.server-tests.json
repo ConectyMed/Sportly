@@ -1,0 +1,13 @@
+{
+  /* The server test suite, typechecked by `pnpm typecheck` (and CI) with the
+     production compiler options, but as its own program: `pnpm build` runs
+     `tsc -b` over tsconfig.json's references, and this file is not one of
+     them, so a test file cannot fail a deployment. */
+  "extends": "./tsconfig.server.json",
+  "compilerOptions": {
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.server-tests.tsbuildinfo"
+  },
+  "include": ["server/__tests__"],
+  "exclude": []
+}
