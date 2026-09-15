@@ -13,6 +13,15 @@
 name: Nutrition data
 
 on:
+  # Also on a push that changes the data tooling itself, so the refresh can be
+  # exercised on a branch before the workflow exists on the default branch
+  # (workflow_dispatch only knows workflows from there).
+  push:
+    paths:
+      - .github/workflows/nutrition-data.yml
+      - scripts/ingest-ciqual.mjs
+      - scripts/off-lookup.mjs
+      - server/nutrition/off.ts
   workflow_dispatch:
     inputs:
       commit_snapshot:
@@ -80,7 +89,7 @@ jobs:
           head -n 5 data/ciqual/ciqual-2025.csv
 
       - name: Commit the snapshot
-        if: ${{ inputs.commit_snapshot }}
+        if: ${{ github.event_name == 'push' || inputs.commit_snapshot }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -127,4 +136,4 @@ jobs:
             psql "$SPORTLY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
           done
       - name: Live lookup through the real code path
-        run: node scripts/off-lookup.mjs ${{ inputs.barcodes }} --raw
+        run: node scripts/off-lookup.mjs ${{ inputs.barcodes || '3017624010701 3274080005003 0000000000000' }} --raw
