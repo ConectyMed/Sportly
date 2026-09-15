@@ -24,5 +24,9 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["server", "api"]
+  "include": ["server", "api"],
+  /* Tests are typechecked by tsconfig.server-tests.json (pnpm typecheck), never
+     by the production build: `tsc -b` runs inside `pnpm build`, and a broken
+     test file must not be able to fail a deployment. */
+  "exclude": ["server/__tests__"]
 }
