@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { createBoundaryApp } from '../app'
-import { createMemoryStore } from '../store/memory'
-import { mintToken } from '../identity/token'
-import { fakeProviders, fakeVisionProvider, readJson, SECRET, SUBJECT_A, SUBJECT_B, testEnv, type ErrorEnvelope } from './helpers'
+import { createBoundaryApp } from '../app.js'
+import { createMemoryStore } from '../store/memory.js'
+import { mintToken } from '../identity/token.js'
+import { fakeProviders, fakeVisionProvider, readJson, SECRET, SUBJECT_A, SUBJECT_B, testEnv, type ErrorEnvelope } from './helpers.js'
 
 /**
  * Scope isolation has to prove two separate things, and a test that proves only

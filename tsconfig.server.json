@@ -6,9 +6,13 @@
     "types": ["node"],
     "skipLibCheck": true,
 
-    /* Bundler mode: Vercel's Node runtime compiles these with esbuild. */
-    "module": "esnext",
-    "moduleResolution": "bundler",
+    /* Node ESM, exactly as deployed: Vercel compiles api/ and server/ file by
+       file and Node's loader runs the result, so every relative import must
+       carry its emitted extension (`./x.js`, `./dir/index.js`). nodenext makes
+       tsc reject an extensionless specifier instead of leaving it to the
+       runtime. */
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,

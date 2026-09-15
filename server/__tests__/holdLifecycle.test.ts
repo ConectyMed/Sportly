@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { runModelCall } from '../boundary'
-import { DEFAULT_DAILY_CAPS_USD, FUNCTION_MAX_DURATION_MS, HOLD_TTL_MS, PROVIDER_DEADLINE_MS } from '../budget/caps'
-import { createMemoryStore } from '../store/memory'
-import { requireRealStorageEngine, type ModelCallLogRow } from '../store/port'
-import { createPostgresStore, type SqlExecutor } from '../store/postgres'
-import { fakeVisionProvider, SUBJECT_A } from './helpers'
+import { runModelCall } from '../boundary.js'
+import { DEFAULT_DAILY_CAPS_USD, FUNCTION_MAX_DURATION_MS, HOLD_TTL_MS, PROVIDER_DEADLINE_MS } from '../budget/caps.js'
+import { createMemoryStore } from '../store/memory.js'
+import { requireRealStorageEngine, type ModelCallLogRow } from '../store/port.js'
+import { createPostgresStore, type SqlExecutor } from '../store/postgres.js'
+import { fakeVisionProvider, SUBJECT_A } from './helpers.js'
 
 /**
  * Hold lifecycle — the logic, against the in-memory adapter.

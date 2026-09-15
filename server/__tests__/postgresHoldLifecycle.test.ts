@@ -1,9 +1,9 @@
 import { expect, it } from 'vitest'
-import { runModelCall } from '../boundary'
-import { DEFAULT_DAILY_CAPS_USD, HOLD_TTL_MS } from '../budget/caps'
-import type { ModelCallLogRow } from '../store/port'
-import { describePostgres } from './pg'
-import { fakeVisionProvider, SUBJECT_A } from './helpers'
+import { runModelCall } from '../boundary.js'
+import { DEFAULT_DAILY_CAPS_USD, HOLD_TTL_MS } from '../budget/caps.js'
+import type { ModelCallLogRow } from '../store/port.js'
+import { describePostgres } from './pg.js'
+import { fakeVisionProvider, SUBJECT_A } from './helpers.js'
 
 /**
  * The hold lifecycle against a real Postgres: what happens when a hold is

@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { createBoundaryApp, MAX_IMAGE_BASE64_CHARS, MAX_INSTRUCTION_CHARS, MAX_PROMPT_CHARS } from '../app'
-import { BoundaryError } from '../errors'
-import { mintToken } from '../identity/token'
-import { createMemoryStore } from '../store/memory'
-import { fakeProviders, fakeVisionProvider, readJson, SECRET, SUBJECT_A, testEnv, type CallEnvelope, type ErrorEnvelope } from './helpers'
+import { createBoundaryApp, MAX_IMAGE_BASE64_CHARS, MAX_INSTRUCTION_CHARS, MAX_PROMPT_CHARS } from '../app.js'
+import { BoundaryError } from '../errors.js'
+import { mintToken } from '../identity/token.js'
+import { createMemoryStore } from '../store/memory.js'
+import { fakeProviders, fakeVisionProvider, readJson, SECRET, SUBJECT_A, testEnv, type CallEnvelope, type ErrorEnvelope } from './helpers.js'
 
 const post = (body: unknown, token?: string) =>
   new Request('https://x/api/model/call', {
@@ -31,7 +31,7 @@ describe('the single model-call entry point', () => {
     const store = createMemoryStore()
     const app = createBoundaryApp({ envSource: testEnv(), store, providers: fakeProviders(fakeVisionProvider()) })
     // Swap in the real not-implemented text provider for this assertion.
-    const real = createBoundaryApp({ envSource: testEnv(), store, providers: { vision: app.providers.vision, text: (await import('../provider/adapters/notImplementedText')).createNotImplementedTextProvider() } })
+    const real = createBoundaryApp({ envSource: testEnv(), store, providers: { vision: app.providers.vision, text: (await import('../provider/adapters/notImplementedText.js')).createNotImplementedTextProvider() } })
     const res = await real.handleModelCall(post({ route: 'coaching', taskType: 'text', prompt: 'hello' }, mintToken(SUBJECT_A, SECRET)))
     expect(res.status).toBe(502)
     expect((await readJson<ErrorEnvelope>(res)).error.code).toBe('PROVIDER_UNAVAILABLE')
@@ -117,7 +117,7 @@ describe('the client cannot reach a provider directly', () => {
 
   it('every server-only env var is absent from the client source tree', async () => {
     const { execSync } = await import('node:child_process')
-    const { SERVER_ONLY_ENV_VARS } = await import('../env')
+    const { SERVER_ONLY_ENV_VARS } = await import('../env.js')
     for (const name of SERVER_ONLY_ENV_VARS) {
       const hits = execSync(`grep -rn --include=*.ts --include=*.tsx --include=*.html "${name}" src index.html || true`, { encoding: 'utf8' }).trim()
       expect(hits, `${name} must not appear in client source`).toBe('')
@@ -126,7 +126,7 @@ describe('the client cannot reach a provider directly', () => {
 
   it('the bundle scanner looks for the prefix the server actually uses', async () => {
     const script = await readFile('scripts/check-bundle-secrets.mjs', 'utf8')
-    const { SERVER_ENV_PREFIX, SERVER_ONLY_ENV_VARS } = await import('../env')
+    const { SERVER_ENV_PREFIX, SERVER_ONLY_ENV_VARS } = await import('../env.js')
     expect(script).toContain(SERVER_ENV_PREFIX)
     expect(SERVER_ONLY_ENV_VARS.every((n) => n.startsWith(SERVER_ENV_PREFIX))).toBe(true)
   })

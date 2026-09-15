@@ -1,4 +1,4 @@
-import { isBoundaryError } from './errors'
+import { isBoundaryError } from './errors.js'
 
 /**
  * A small fetch-style HTTP shim.

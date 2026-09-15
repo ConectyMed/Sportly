@@ -13,15 +13,15 @@ export type {
   VisionOutput,
   VisionProvider,
   VisionRequest,
-} from './contract'
-export { fetchTransport, statusToBoundaryError, type Transport, type TransportResponse } from './transport'
+} from './contract.js'
+export { fetchTransport, statusToBoundaryError, type Transport, type TransportResponse } from './transport.js'
 
-import type { ServerEnv } from '../env'
-import { boundaryError } from '../errors'
-import type { TextProvider, VisionProvider } from './contract'
-import { createAnthropicVisionProvider } from './adapters/anthropicVision'
-import { createNotImplementedTextProvider } from './adapters/notImplementedText'
-import type { Transport } from './transport'
+import type { ServerEnv } from '../env.js'
+import { boundaryError } from '../errors.js'
+import type { TextProvider, VisionProvider } from './contract.js'
+import { createAnthropicVisionProvider } from './adapters/anthropicVision.js'
+import { createNotImplementedTextProvider } from './adapters/notImplementedText.js'
+import type { Transport } from './transport.js'
 
 export interface Providers {
   vision: VisionProvider

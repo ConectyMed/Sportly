@@ -1,6 +1,6 @@
 
-import type { EnvSource } from '../env'
-import type { ProviderResult, Providers, TextProvider, VisionOutput, VisionProvider } from '../provider'
+import type { EnvSource } from '../env.js'
+import type { ProviderResult, Providers, TextProvider, VisionOutput, VisionProvider } from '../provider/index.js'
 
 export const SECRET = 'test-secret-that-is-long-enough-to-pass-32'
 export const SUBJECT_A = '11111111-1111-4111-8111-111111111111'

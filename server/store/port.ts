@@ -1,4 +1,4 @@
-import type { BoundaryErrorCode } from '../errors'
+import type { BoundaryErrorCode } from '../errors.js'
 
 /** Which product surface spent the money. Caps are configured per route. */
 export type Route = 'food_scan' | 'coaching' | 'program'

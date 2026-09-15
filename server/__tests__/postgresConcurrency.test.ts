@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { describePostgres } from './pg'
+import { describePostgres } from './pg.js'
 
 /**
  * The admission path against a real Postgres.

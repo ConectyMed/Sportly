@@ -1,5 +1,5 @@
-import { BoundaryError } from '../../errors'
-import type { ProviderResult, TextOutput, TextProvider, TextRequest } from '../contract'
+import { BoundaryError } from '../../errors.js'
+import type { ProviderResult, TextOutput, TextProvider, TextRequest } from '../contract.js'
 
 /**
  * The text side of the interface, deliberately unimplemented.

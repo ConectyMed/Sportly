@@ -1,4 +1,4 @@
-import { BoundaryError, boundaryError, type BoundaryErrorCode } from '../errors'
+import { BoundaryError, boundaryError, type BoundaryErrorCode } from '../errors.js'
 
 /**
  * The only place a server adapter touches the network, injected so adapters can

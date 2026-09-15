@@ -1,6 +1,6 @@
-import { boundaryError } from '../errors'
-import type { BoundaryStore } from '../store/port'
-import { isSubjectIdShape, mintToken } from './token'
+import { boundaryError } from '../errors.js'
+import type { BoundaryStore } from '../store/port.js'
+import { isSubjectIdShape, mintToken } from './token.js'
 
 /**
  * Trust-on-first-use subject minting.

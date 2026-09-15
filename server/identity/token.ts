@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import { boundaryError } from '../errors'
+import { boundaryError } from '../errors.js'
 
 /**
  * Subject tokens.

@@ -1,7 +1,7 @@
 import { Pool } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest'
-import { createPostgresStore, type SqlExecutor } from '../store/postgres'
-import { requireRealStorageEngine, type BoundaryStore } from '../store/port'
+import { createPostgresStore, type SqlExecutor } from '../store/postgres.js'
+import { requireRealStorageEngine, type BoundaryStore } from '../store/port.js'
 
 /**
  * Real-Postgres test suites.

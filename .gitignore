@@ -32,3 +32,6 @@ test-results
 .env
 .env.*
 !.env.example
+
+# Vercel CLI working directory (vercel link/pull/build write project ids and build output here)
+.vercel

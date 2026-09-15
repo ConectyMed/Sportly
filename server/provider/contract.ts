@@ -1,4 +1,4 @@
-import type { TaskType } from '../store/port'
+import type { TaskType } from '../store/port.js'
 
 /**
  * The neutral provider interface.

@@ -1,6 +1,6 @@
 import { neon } from '@neondatabase/serverless'
 import { Pool } from 'pg'
-import type { SqlExecutor } from './postgres'
+import type { SqlExecutor } from './postgres.js'
 
 /**
  * The one place a Postgres driver is named.

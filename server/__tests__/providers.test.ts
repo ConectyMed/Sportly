@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { createAnthropicVisionProvider, fromAnthropicResponse, toAnthropicRequest } from '../provider/adapters/anthropicVision'
-import { createNotImplementedTextProvider } from '../provider/adapters/notImplementedText'
-import { createProviders } from '../provider'
-import type { TextProvider, Transport, VisionProvider } from '../provider'
-import { statusToBoundaryError } from '../provider/transport'
-import { loadServerEnv } from '../env'
-import { testEnv } from './helpers'
+import { createAnthropicVisionProvider, fromAnthropicResponse, toAnthropicRequest } from '../provider/adapters/anthropicVision.js'
+import { createNotImplementedTextProvider } from '../provider/adapters/notImplementedText.js'
+import { createProviders } from '../provider/index.js'
+import type { TextProvider, Transport, VisionProvider } from '../provider/index.js'
+import { statusToBoundaryError } from '../provider/transport.js'
+import { loadServerEnv } from '../env.js'
+import { testEnv } from './helpers.js'
 
 const request = { imageBase64: 'aGVsbG8=', mediaType: 'image/jpeg' as const, instruction: 'what is on this plate' }
 
@@ -108,7 +108,7 @@ describe('anthropic vision adapter', () => {
 
 describe('the vendor does not leak to the client', () => {
   it('keeps the provider name and its credential state out of the response body', async () => {
-    const { errorResponse } = await import('../http')
+    const { errorResponse } = await import('../http.js')
     for (const status of [401, 429, 500, 504, 418]) {
       const err = statusToBoundaryError(status, 'Anthropic')
       // The operator's log gets the real message…

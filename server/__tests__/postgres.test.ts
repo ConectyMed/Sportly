@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createPostgresStore, type SqlExecutor } from '../store/postgres'
-import { SUBJECT_A } from './helpers'
+import { createPostgresStore, type SqlExecutor } from '../store/postgres.js'
+import { SUBJECT_A } from './helpers.js'
 
 /**
  * The Postgres adapter against a recording executor. This is not a database
@@ -122,10 +122,10 @@ describe('driver errors never reach the client', () => {
     // database and — on an auth failure — the user. A test that throws a plain
     // Error exercises asBoundaryError instead, which is the one path that
     // cannot leak, so this goes through the Postgres adapter's own guard().
-    const { createBoundaryApp } = await import('../app')
-    const { errorResponse } = await import('../http')
-    const { fakeProviders, fakeVisionProvider, readJson, SECRET, testEnv } = await import('./helpers')
-    const { mintToken } = await import('../identity/token')
+    const { createBoundaryApp } = await import('../app.js')
+    const { errorResponse } = await import('../http.js')
+    const { fakeProviders, fakeVisionProvider, readJson, SECRET, testEnv } = await import('./helpers.js')
+    const { mintToken } = await import('../identity/token.js')
 
     const leaky = (async () => {
       throw new Error('connect ECONNREFUSED postgres://sportly:hunter2@ep-secret-db.neon.tech:5432/main')

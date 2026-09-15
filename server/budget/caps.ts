@@ -1,5 +1,5 @@
-import type { ServerEnv } from '../env'
-import type { Route } from '../store/port'
+import type { ServerEnv } from '../env.js'
+import type { Route } from '../store/port.js'
 
 /**
  * Daily spend caps, USD per subject per route, per UTC day.

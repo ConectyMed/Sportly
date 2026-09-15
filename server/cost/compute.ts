@@ -1,4 +1,4 @@
-import { rateFor } from './rates'
+import { rateFor } from './rates.js'
 
 export interface TokenUsage {
   tokensIn: number

@@ -1,6 +1,6 @@
-import { boundaryError } from '../../errors'
-import type { ProviderCallOptions, ProviderResult, VisionOutput, VisionProvider, VisionRequest } from '../contract'
-import { fetchTransport, statusToBoundaryError, type Transport } from '../transport'
+import { boundaryError } from '../../errors.js'
+import type { ProviderCallOptions, ProviderResult, VisionOutput, VisionProvider, VisionRequest } from '../contract.js'
+import { fetchTransport, statusToBoundaryError, type Transport } from '../transport.js'
 
 /**
  * Anthropic Messages API, image input. A real adapter: it builds the real

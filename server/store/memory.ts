@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { BindSubjectResult, BoundaryStore, ModelCallLogRow, Route, SpendAdmission, SpendAdmissionRequest } from './port'
+import type { BindSubjectResult, BoundaryStore, ModelCallLogRow, Route, SpendAdmission, SpendAdmissionRequest } from './port.js'
 
 export interface MemoryStoreOptions {
   /** Mint attempts allowed per key per window. */

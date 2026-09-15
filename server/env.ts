@@ -1,4 +1,4 @@
-import { BoundaryError } from './errors'
+import { BoundaryError } from './errors.js'
 
 /**
  * Server-only configuration.

@@ -1,5 +1,5 @@
-import { BoundaryError } from '../errors'
-import type { BindSubjectResult, BoundaryStore, ModelCallLogRow, Route } from './port'
+import { BoundaryError } from '../errors.js'
+import type { BindSubjectResult, BoundaryStore, ModelCallLogRow, Route } from './port.js'
 
 /**
  * Postgres adapter.

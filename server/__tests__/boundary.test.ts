@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { runModelCall } from '../boundary'
-import { DEFAULT_DAILY_CAPS_USD, resolveDailyCaps } from '../budget/caps'
-import { BoundaryError, isBoundaryError } from '../errors'
-import { createMemoryStore } from '../store/memory'
-import { fakeVisionProvider, SUBJECT_A } from './helpers'
+import { runModelCall } from '../boundary.js'
+import { DEFAULT_DAILY_CAPS_USD, resolveDailyCaps } from '../budget/caps.js'
+import { BoundaryError, isBoundaryError } from '../errors.js'
+import { createMemoryStore } from '../store/memory.js'
+import { fakeVisionProvider, SUBJECT_A } from './helpers.js'
 
 const caps = { ...DEFAULT_DAILY_CAPS_USD }
 

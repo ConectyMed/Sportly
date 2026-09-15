@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { computeCostUsd } from '../cost/compute'
-import { MODEL_RATES, isKnownModel, rateFor } from '../cost/rates'
-import { buildCallLogRow } from '../log/callLog'
+import { computeCostUsd } from '../cost/compute.js'
+import { MODEL_RATES, isKnownModel, rateFor } from '../cost/rates.js'
+import { buildCallLogRow } from '../log/callLog.js'
 
 describe('cost accounting', () => {
   it('derives cost from token counts and the rate table', () => {

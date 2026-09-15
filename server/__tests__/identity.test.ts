@@ -1,10 +1,10 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { loadServerEnv, MIN_TOKEN_SECRET_LENGTH, SERVER_ENV_PREFIX, SERVER_ONLY_ENV_VARS } from '../env'
-import { mintSubjectToken } from '../identity/mint'
-import { bearerToken, isSubjectIdShape, mintToken, TOKEN_VERSION, verifyToken } from '../identity/token'
-import { createMemoryStore } from '../store/memory'
-import { SECRET, SUBJECT_A, SUBJECT_B, testEnv } from './helpers'
+import { loadServerEnv, MIN_TOKEN_SECRET_LENGTH, SERVER_ENV_PREFIX, SERVER_ONLY_ENV_VARS } from '../env.js'
+import { mintSubjectToken } from '../identity/mint.js'
+import { bearerToken, isSubjectIdShape, mintToken, TOKEN_VERSION, verifyToken } from '../identity/token.js'
+import { createMemoryStore } from '../store/memory.js'
+import { SECRET, SUBJECT_A, SUBJECT_B, testEnv } from './helpers.js'
 
 describe('server env', () => {
   it('fails loudly when the signing secret is absent — no unsigned fallback', () => {
@@ -120,8 +120,8 @@ describe('trust-on-first-use minting', () => {
 
 describe('storage configuration', () => {
   it('refuses to run on a per-process store unless the deployment opts in', async () => {
-    const { createBoundaryApp } = await import('../app')
-    const { fakeProviders, fakeVisionProvider } = await import('./helpers')
+    const { createBoundaryApp } = await import('../app.js')
+    const { fakeProviders, fakeVisionProvider } = await import('./helpers.js')
     const providers = fakeProviders(fakeVisionProvider())
 
     // A cap backed by a store that empties on every cold start is not a cap.
@@ -132,8 +132,8 @@ describe('storage configuration', () => {
   })
 
   it('uses the Postgres adapter when a SQL executor is supplied', async () => {
-    const { createBoundaryApp } = await import('../app')
-    const { fakeProviders, fakeVisionProvider } = await import('./helpers')
+    const { createBoundaryApp } = await import('../app.js')
+    const { fakeProviders, fakeVisionProvider } = await import('./helpers.js')
     const calls: string[] = []
     const app = createBoundaryApp({
       envSource: testEnv(),
@@ -150,7 +150,7 @@ describe('storage configuration', () => {
 
 describe('rate-limit bucketing cannot be chosen by the caller', () => {
   it('ignores a client-supplied X-Forwarded-For in favour of the platform header', async () => {
-    const { clientIp } = await import('../http')
+    const { clientIp } = await import('../http.js')
     const req = (headers: Record<string, string>) => new Request('https://x/api/identity/token', { method: 'POST', headers })
 
     // Left-most XFF is whatever the client sent under an appending proxy.
@@ -161,8 +161,8 @@ describe('rate-limit bucketing cannot be chosen by the caller', () => {
   })
 
   it('a spoofed X-Forwarded-For does not buy a fresh mint bucket', async () => {
-    const { createBoundaryApp } = await import('../app')
-    const { fakeProviders, fakeVisionProvider } = await import('./helpers')
+    const { createBoundaryApp } = await import('../app.js')
+    const { fakeProviders, fakeVisionProvider } = await import('./helpers.js')
     const store = createMemoryStore({ mintLimit: 2 })
     const app = createBoundaryApp({ envSource: testEnv({ SPORTLY_ALLOW_EPHEMERAL_STORE: '1' }), store, providers: fakeProviders(fakeVisionProvider()) })
 
@@ -186,9 +186,9 @@ describe('rate-limit bucketing cannot be chosen by the caller', () => {
 
 describe('configuration details stay out of HTTP responses', () => {
   it('does not name server-only variables in an error body', async () => {
-    const { errorResponse } = await import('../http')
-    const { createBoundaryApp } = await import('../app')
-    const { fakeProviders, fakeVisionProvider } = await import('./helpers')
+    const { errorResponse } = await import('../http.js')
+    const { createBoundaryApp } = await import('../app.js')
+    const { fakeProviders, fakeVisionProvider } = await import('./helpers.js')
 
     for (const source of [{}, testEnv()]) {
       const err = (() => {

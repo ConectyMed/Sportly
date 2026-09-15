@@ -1,5 +1,5 @@
-import { boundaryApp } from '../../server/app'
-import { errorResponse, toNodeHandler } from '../../server/http'
+import { boundaryApp } from '../../server/app.js'
+import { errorResponse, toNodeHandler } from '../../server/http.js'
 
 /**
  * POST /api/identity/token — mint a signed subject token, once per subject.
