@@ -1,0 +1,130 @@
+# Nutrition data maintenance. Manual only; nothing here deploys.
+#
+# `refresh-ciqual` fetches the official ANSES Ciqual table from Recherche Data
+# Gouv (see scripts/ingest-ciqual.mjs for the DOI), rebuilds the snapshot under
+# data/ciqual/, loads it into a throwaway Postgres to prove it applies, and
+# commits the snapshot back to the branch it ran on when it changed. Run it
+# when ANSES publishes a new version.
+#
+# `off-smoke` looks a few barcodes up through the live Open Food Facts API via
+# the real code path and a throwaway Postgres, and prints the cache rows. It is
+# a smoke check, not a test: the test suite never touches the network.
+
+name: Nutrition data
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_snapshot:
+        description: Commit the refreshed Ciqual snapshot back to this branch
+        type: boolean
+        default: true
+      barcodes:
+        description: Barcodes for the Open Food Facts smoke check
+        type: string
+        default: "3017624010701 3274080005003 0000000000000"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-ciqual:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sportly
+          POSTGRES_PASSWORD: sportly
+          POSTGRES_DB: sportly_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sportly -d sportly_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SPORTLY_TEST_DATABASE_URL: postgres://sportly:sportly@localhost:5432/sportly_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Fetch the official Ciqual table and rebuild the snapshot
+        run: node scripts/ingest-ciqual.mjs fetch --out data/ciqual
+
+      - name: Apply migrations
+        run: |
+          for f in migrations/*.sql; do
+            echo "== $f"
+            psql "$SPORTLY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+
+      - name: Load the snapshot and report the row count
+        run: node scripts/ingest-ciqual.mjs apply --in data/ciqual
+
+      - name: Show what changed
+        run: |
+          git status --short data/ciqual
+          head -c 2000 data/ciqual/ciqual-2025.meta.json
+          echo
+          head -n 5 data/ciqual/ciqual-2025.csv
+
+      - name: Commit the snapshot
+        if: ${{ inputs.commit_snapshot }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/ciqual
+          if git diff --cached --quiet; then
+            echo "snapshot unchanged, nothing to commit"
+          else
+            git commit -m "data: refresh Ciqual snapshot from the official ANSES source" -m "Fetched by the Nutrition data workflow from Recherche Data Gouv (doi:10.57745/RDMHWY), Licence Ouverte 2.0."
+            git push origin HEAD:${{ github.ref_name }}
+          fi
+
+  off-smoke:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sportly
+          POSTGRES_PASSWORD: sportly
+          POSTGRES_DB: sportly_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sportly -d sportly_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SPORTLY_TEST_DATABASE_URL: postgres://sportly:sportly@localhost:5432/sportly_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Apply migrations
+        run: |
+          for f in migrations/*.sql; do
+            echo "== $f"
+            psql "$SPORTLY_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
+      - name: Live lookup through the real code path
+        run: node scripts/off-lookup.mjs ${{ inputs.barcodes }} --raw
