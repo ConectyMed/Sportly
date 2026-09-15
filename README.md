@@ -133,6 +133,8 @@ for f in migrations/*.sql; do psql -d sportly_test -v ON_ERROR_STOP=1 -f "$f"; d
 SPORTLY_TEST_DATABASE_URL=postgres://localhost/sportly_test pnpm test:unit
 ```
 
+CI also **loads every `api/` entrypoint with plain `node`, on every push** (`pnpm check:esm-load`): it emits `api/` and `server/` with `tsc` the way Vercel does, file by file, then imports each handler under Node's ESM loader with no bundler, test runner or loader hook, and invokes it once. That is the only local step that fails on an extensionless relative import, which Node rejects at runtime but vitest resolves and a typecheck does not load.
+
 **Known limits, stated rather than hidden.** A token has no expiry and no revocation list, by design for V8a — a leaked token is valid until the signing secret rotates. Only the winning attempt's token usage is costed, so a retried call that burned tokens upstream before failing under-reports by up to one attempt (`retry_count` makes the gap visible). `cache_creation_input_tokens` is counted at the input rate rather than the higher cache-write rate; the vision adapter sets no `cache_control`, so this is zero in practice today.
 
 **Deploy target: Vercel, and only Vercel.** `vercel.json` deploys the static client and `api/` together, with `maxDuration: 60` on the functions (the number the hold TTL is derived from). The former GitHub Pages workflow was retired: Pages serves static files only, so `api/` cannot run there, and keeping both targets meant shipping a client whose provider boundary 404s the moment a feature is wired through it. `.github/workflows/ci.yml` is the only workflow — it typechecks, lints, runs every test against a Postgres 16 service container with the migrations applied, and builds with the bundle scanner; it deploys nothing.

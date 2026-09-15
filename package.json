@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build && node scripts/postbuild.mjs && node scripts/check-bundle-secrets.mjs",
     "lint": "oxlint",
     "typecheck": "tsc -b",
+    "check:esm-load": "node scripts/check-api-esm-load.mjs",
     "preview": "vite preview --host",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",

@@ -68,6 +68,14 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Vercel compiles api/ and server/ file by file and runs them under
+      # Node's ESM loader, which rejects an extensionless relative import.
+      # Nothing else here loads the handlers that way — vitest resolves what
+      # Node would not, and a typecheck is not a load — so emit and import
+      # every api/ entrypoint with plain node, exactly as the runtime will.
+      - name: Load api/ entrypoints with plain node ESM
+        run: pnpm check:esm-load
+
       - name: Unit tests (in-memory and Postgres, nothing skipped)
         run: pnpm test:unit
 
