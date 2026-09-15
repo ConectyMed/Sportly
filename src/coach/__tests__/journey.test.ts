@@ -33,7 +33,10 @@ function reset() {
 }
 
 // A positive claim of change (“Logged …”), not a negation (“no meals logged”, “nothing planned”).
-const CLAIMS = /(?<!\b(?:no|not|nothing|never|already|still|was|were|been|is|are|have|has|had|you've|i've)\s)\b(added|logged|removed|deleted|updated|moved|completed|saved|remembered|planned|created|set to|noted:|rebuilt|adjusted|scaled|halved)\b/i
+// “Planned yesterday: Upper Body (done).” is a day report (coach.report.planned), not a claim: a
+// “planned” that is followed by a colon before the sentence ends is a headline, so it is excluded.
+// The tool claim “Planned Upper Body for Tuesday.” has no colon and is still caught.
+const CLAIMS = /(?<!\b(?:no|not|nothing|never|already|still|was|were|been|is|are|have|has|had|you've|i've)\s)\b(added|logged|removed|deleted|updated|moved|completed|saved|remembered|planned(?![^.!?\n]*:)|created|set to|noted:|rebuilt|adjusted|scaled|halved)\b/i
 const FALLBACK = /I want to get this right|Tell me a little more and I will act on it|Not sure I caught that/i
 
 async function say(text: string): Promise<CoachResponse> {

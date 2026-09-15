@@ -87,6 +87,58 @@ Tests: `src/coach/__tests__/model.test.ts` (provider contract, a `FakeLLMProvide
 - **Memory with rules.** Memories carry confidence, persistence, expiry and subjects. New explicit information replaces a contradicting older memory. Passing states are check-ins, not memories.
 - **Knowledge, separate from behaviour.** `src/knowledge` defines sources, documents and chunks with provenance and a `KnowledgeRetriever` interface. Relevant hits are attached to the model input per message; the base is never dumped whole.
 
+## The provider boundary (V8a)
+
+V6 gave the client a provider-neutral seam. V8a puts the same idea behind a server, so a model call can be paid for by Sportly rather than by a key the user pastes into the app. It is a boundary only: no feature is wired through it yet.
+
+```
+CLIENT                                  SERVER (api/ + server/)
+POST /api/identity/token  ──────────▶  mint one signed token per subject (trust-on-first-use)
+POST /api/model/call      ──────────▶  verify token  →  subject
+  Authorization: Bearer …                  ↓
+                                       admission for (subject, route)  ── refused? ──▶ BUDGET_EXCEEDED, nothing sent
+                                         model priced? cap has room?
+                                         hold taken, atomically
+                                           ↓ admitted
+                                       VisionProvider / TextProvider   (neutral interface)
+                                           ↓                            adapters hold the vendor shape
+                                       call log row written + hold released — on success AND on failure
+```
+
+- **One entry point.** `api/model/call.ts` is the only way to reach a provider. Provider keys live in server-only environment variables and are read behind it; `scripts/check-bundle-secrets.mjs` runs as part of `pnpm build` and fails the build if a `SPORTLY_*` name or a key-shaped literal appears in `dist/`.
+- **A neutral interface, two adapters.** Feature code imports `VisionProvider` / `TextProvider` from `server/provider` and never a vendor SDK. `adapters/anthropicVision.ts` is a real Messages-API adapter with image input; `adapters/notImplementedText.ts` conforms in full and refuses at the call, which keeps the interface honest without a coaching model existing yet.
+- **Identity without accounts.** A subject token is an HMAC over `{ v, sub, iat }`. The signing secret is server-only and has no fallback — a missing secret stops the boundary from starting rather than degrading to trusting the client. The first mint **adopts** the client's existing local UUID so on-device data (the Alex demo, memories, workouts, meals, goals, calendar) stays attached to the same identity; a subject can be bound exactly once, and the mint endpoint is rate-limited. The column is `subject_id`, not `device_id`: real accounts will link to a subject rather than replace it.
+- **Cost, never guessed.** `server/cost/rates.ts` holds per-model rates and cost is derived from token counts. A model that is not in the table records `cost_usd = null` with `cost_unknown_model = true` — never a silent zero. A database check constraint enforces that the two always agree.
+- **Caps before the call, and they hold under load.** `server/budget/` holds per-route daily caps (`food_scan`, `coaching`, `program`), overridable per deployment. Admission runs before anything is sent, so a refused call never reaches a provider and never costs anything. Two things make it a cap rather than a gesture: it **fails closed on an unpriced model** (a null cost adds nothing to the day's spend, so a mispointed `SPORTLY_VISION_MODEL` would otherwise mean unlimited spend under a cap that never fires), and admission **takes a hold atomically**, counting committed spend plus live holds. A hold whose request died is returned to its bucket after its TTL.
+
+  Atomicity here is a single `UPDATE` with the cap in its `WHERE` clause, against one counter row per (subject, route, day). That is the only shape that holds in `READ COMMITTED`: a caller that blocks on the row lock re-evaluates its condition against the row the winner committed. A count-then-insert does not work *even wrapped in an advisory lock* — the statement's snapshot is taken before the lock is acquired inside it, so after blocking, the count still reads pre-lock state. Measured on Postgres 16, that version admitted 5, 14 and 7 of 20 concurrent calls against a cap of 5 (holding $0.70 against a $0.25 cap) and 19–20 of 20 mint attempts against a limit of 5. The `UPDATE` gate admits exactly 5, run after run.
+- **A log that spends no privacy.** One row per call — success or failure — carrying spend and outcome only. No prompts, no responses, no images, no credentials.
+- **Holds have a lifecycle.** A hold is taken by one function invocation and released by that invocation's settle. When the settle never runs — the platform killed the function at its maximum duration, the provider hung, the process died between the hold and the spend record — the hold **expires**: `HOLD_TTL_MS` (server/budget/caps.ts) sits just above the function's `maxDuration` in `vercel.json`, because past that point the invocation that took the hold is dead and nobody is left to settle it. An expired hold stops counting toward admission and its reservation goes back to the bucket, in the same admission decision. Before that, the boundary imposes its own **provider deadline** inside the function maximum, so a hanging provider is aborted with time left to write the row and release the hold rather than left to the TTL. And **reconciliation is idempotent**: `settleSpend` is keyed on the call's `request_id` (a unique index, migration `0002`), so a replayed settle writes no second row, charges no second cost and releases no hold twice — a late settle of a hold that expiry already reclaimed commits the cost and returns nothing.
+- **Storage behind a port.** Six operations named after what they do, every one scoped by subject, so a cross-subject read cannot be expressed. `store/postgres.ts` and `store/memory.ts` implement it. The in-memory adapter proves *logic* only — it is single-threaded JavaScript, atomic for free, and provides none of the properties an engine provides: atomicity, isolation, ordering, constraints. Every store declares its `engine`, and a test that asserts an engine property calls `requireRealStorageEngine` first, so pointing it at the in-memory adapter fails loudly instead of passing vacuously. Supabase or another Postgres stays switchable without touching feature code.
+
+**Configuration** (all server-only, never bundled): `SPORTLY_TOKEN_SECRET` (required, ≥ 32 chars), `SPORTLY_DATABASE_URL`, `SPORTLY_ANTHROPIC_API_KEY`, `SPORTLY_VISION_MODEL` (must be in the rate table), `SPORTLY_DAILY_CAP_{FOOD_SCAN,COACHING,PROGRAM}_USD`, `SPORTLY_ALLOW_EPHEMERAL_STORE=1` (local development only — a per-process store resets both the cap and the one-token-per-subject rule on every cold start, so it is never the silent default).
+
+Apply `migrations/*.sql` in order (additive; `0001` creates five tables, `0002` adds one unique index, nothing altered) and set `SPORTLY_DATABASE_URL`. `server/store/pgDriver.ts` is the only file that names a driver, and it picks one by connection string:
+
+- **Neon** → `@neondatabase/serverless` over HTTP. No socket is opened and nothing is held between invocations, so a burst of function instances cannot exhaust the connection limit. This works only because every store operation is a single statement; HTTP mode gives each its own implicit transaction and cannot span several. An operation needing a multi-statement transaction must move to the WebSocket pool first.
+- **Anything else** (plain Postgres, Supabase) → a module-scoped node-postgres pool, reused by a warm instance. Point it at a *pooled* endpoint (PgBouncer transaction mode, e.g. Supabase's `:6543`); a direct endpoint runs out of connections under concurrency. Transaction-mode pooling is safe for the same reason: one statement, one transaction, no session state across requests.
+
+Tests: `server/__tests__/` — caps block pre-call and allow under budget, concurrent calls cannot all pass the same check, an unpriced model is refused up front (and a surprising one in a response is flagged rather than zeroed), a row is written on success and on failure, a hold that is never resolved expires and the subject is admitted again, a hanging provider is timed out with its hold released, settling one call twice charges once, scope isolation (subject A cannot touch B's rows **and** a tampered or unsigned token is rejected), driver and configuration messages never reach the client, and the built bundle carries no server configuration.
+
+The concurrency and hold-lifecycle suites run **against a real Postgres, on every push** — the in-memory store is single-threaded JavaScript and so atomic for free, which means it proves nothing about the deployed path. They are not opt-in: without `SPORTLY_TEST_DATABASE_URL` they fail with a message saying so, and skip only under an explicit `SPORTLY_SKIP_POSTGRES_TESTS=1`, which CI never sets. Locally:
+
+```sh
+createdb sportly_test
+for f in migrations/*.sql; do psql -d sportly_test -v ON_ERROR_STOP=1 -f "$f"; done
+SPORTLY_TEST_DATABASE_URL=postgres://localhost/sportly_test pnpm test:unit
+```
+
+CI also **loads every `api/` entrypoint with plain `node`, on every push** (`pnpm check:esm-load`): it emits `api/` and `server/` with `tsc` the way Vercel does, file by file, then imports each handler under Node's ESM loader with no bundler, test runner or loader hook, and invokes it once. That is the only local step that fails on an extensionless relative import, which Node rejects at runtime but vitest resolves and a typecheck does not load.
+
+**Known limits, stated rather than hidden.** A token has no expiry and no revocation list, by design for V8a — a leaked token is valid until the signing secret rotates. Only the winning attempt's token usage is costed, so a retried call that burned tokens upstream before failing under-reports by up to one attempt (`retry_count` makes the gap visible). `cache_creation_input_tokens` is counted at the input rate rather than the higher cache-write rate; the vision adapter sets no `cache_control`, so this is zero in practice today.
+
+**Deploy target: Vercel, and only Vercel.** `vercel.json` deploys the static client and `api/` together, with `maxDuration: 60` on the functions (the number the hold TTL is derived from). The former GitHub Pages workflow was retired: Pages serves static files only, so `api/` cannot run there, and keeping both targets meant shipping a client whose provider boundary 404s the moment a feature is wired through it. `.github/workflows/ci.yml` is the only workflow — it typechecks, lints, runs every test against a Postgres 16 service container with the migrations applied, and builds with the bundle scanner; it deploys nothing.
+
 ## Food scan and one living state
 
 - **Food journal.** A meal described in chat (or a photo plus a description) becomes a `LoggedMeal` with per-item portions, macros and a confidence level. Corrections in chat and edits in the card or the Nutrition sheet mutate the same entity, never a copy. Daily totals are never stored: `selectDailyNutrition` derives consumed and remaining from the meals, so Coach, Nutrition and Home cannot disagree.
@@ -104,6 +156,9 @@ UI (React screens & components)
       | model loop (src/coach/model: ModelProvider → tool calls → runToolCall → registry)
       → generators (workout, program, nutrition), readiness, insights, personality voice
   → Zustand store (persisted to localStorage; attachment blobs in IndexedDB)
+
+SERVER (V8a, not yet wired to a feature)
+  api/model/call  → verify subject token → daily cap (pre-call) → provider interface → call log
 ```
 
 | Layer | Where | Notes |
@@ -117,6 +172,7 @@ UI (React screens & components)
 | Coach tools | `src/coach/tools/` | `contracts.ts` (ToolResult, ToolDescriptor), `readTools.ts`, `actionTools.ts`, `registry.ts` (idempotency, audit log, tool descriptions). `src/coach/context.ts` builds the `CoachContextSnapshot`; `src/coach/time.ts` the temporal context; `src/coach/memory.ts` the memory rules. |
 | Knowledge | `src/knowledge/` | Document / chunk / source types, a local keyword retriever and seed coaching notes with provenance. |
 | Model seam | `src/coach/model/` | `contract.ts` (CoachModelInput/Output, ToolCall, ToolCallResult, ModelProvider), `toolDefinitions.ts` (the one tool list with JSON schemas), `schema.ts` (validation), `resolve.ts` (references), `modelTools.ts` (resolve → materialise → execute), `loop.ts` (bounded tool loop with context refresh), `prompt.ts` (model input), `providers.ts` (configuration, lazy adapters), `adapters/` (OpenAI-compatible incl. local endpoints, Anthropic). No key is bundled; the built-in coach is the default and the fallback. |
+| Provider boundary | `server/`, `api/` | Server-side only. `api/model/call.ts` (the one entry point), `api/identity/token.ts` (mint). `server/provider/` (neutral `VisionProvider`/`TextProvider` + vendor adapters), `server/cost/` (rate table, cost from tokens), `server/budget/` (per-route daily caps, checked pre-call), `server/log/` (call-log writer), `server/store/` (narrow subject-scoped port, Postgres + in-memory adapters), `server/identity/` (HMAC subject tokens, trust-on-first-use mint), `server/errors.ts` (the closed error vocabulary). No provider key or server env var reaches the client bundle. |
 | UI kit | `src/components/ui`, `src/components/charts` | Buttons, cards, sheets, sliders, segmented controls, chips, toasts, rings, dependency-free SVG charts. |
 | Screens | `src/screens/*` | Onboarding, Home, Coach, Workout (detail / live session / summary), Nutrition, Progress, Goals, Program, Calendar, Notifications, Profile sections. |
 
