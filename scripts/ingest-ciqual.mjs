@@ -59,7 +59,7 @@ const CONSTITUENTS = [
   { column: 'fat_g', expectCode: 40000, required: true, match: /^lipides \(g\/100 ?g\)/ },
   { column: 'saturated_fat_g', expectCode: 40302, required: false, match: /^ag satures \(g\/100 ?g\)/ },
   { column: 'fibre_g', expectCode: 34100, required: true, match: /^fibres alimentaires \(g\/100 ?g\)/ },
-  { column: 'salt_g', expectCode: 10110, required: false, match: /^sel chlorure de sodium \(g\/100 ?g\)/ },
+  { column: 'salt_g', expectCode: 10004, required: false, match: /^sel chlorure de sodium \(g\/100 ?g\)/ },
   { column: 'water_g', expectCode: 400, required: false, match: /^eau \(g\/100 ?g\)/ },
 ]
 
