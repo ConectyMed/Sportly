@@ -40,7 +40,10 @@ export function actionKey(action: CoachAction): string {
   switch (action.type) {
     case 'create_workout':
     case 'update_workout':
-      return `${action.type}:${action.workout.id}:${hashString(JSON.stringify([action.workout.estimatedMinutes, action.workout.scheduledFor, action.workout.exercises.map((e) => [e.exerciseId, e.sets.map((x) => [x.targetReps, x.targetWeightKg, x.targetSeconds])])]))}`
+      // Everything the write changes, so two different updates to one workout within the window are
+      // two calls, not a repeat: "make it 30 minutes" then "dumbbells only" may leave the exercise list
+      // untouched and differ only in constraints.
+      return `${action.type}:${action.workout.id}:${hashString(JSON.stringify([action.workout.estimatedMinutes, action.workout.scheduledFor, action.workout.status, action.workout.titleKey ?? action.workout.title, action.workout.constraints ?? null, action.workout.exercises.map((e) => [e.exerciseId, e.restSeconds, e.sets.map((x) => [x.targetReps, x.targetWeightKg, x.targetSeconds])])]))}`
     case 'skip_workout':
     case 'remove_workout':
     case 'complete_workout':

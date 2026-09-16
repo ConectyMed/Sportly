@@ -172,3 +172,16 @@
 7. Deliberately out of scope: fuzzy matching of synonym terms, English-side similarity, a language
    hint on the query (which is what would retire the "raisin" class of homograph properly), and
    any UI for choosing among candidates.
+8. **The coach suites run on an injected clock** (`src/coach/__tests__/clock.ts`, imported first in
+   every file of the family): `Date` is faked, pinned to a fixed local 10:00 and still advancing, so
+   `todayKey()` at module load, the demo seed's weekday placement and every "demain"/"vendredi" in
+   a journey resolve the same way on every run. `SPORTLY_TEST_NOW=YYYY-MM-DD` overrides the pin and
+   CI runs the family once per weekday of a full week. Read against the real clock the same tree
+   had passed on the 14th and failed on the 15th and 16th on different sentences. The sweep exposed
+   three real defects, fixed rather than tolerated: the journey claim detector had been relaxed to
+   overlook "Planned yesterday: …" (restored to full strength; the day-report template now reads
+   "On the plan yesterday: …"), "Move tomorrow's workout to Friday" on a Thursday answered "Moved …
+   from Friday to Friday" (now: already on Friday, nothing moved), and the tool registry's repeat
+   ledger keyed `update_workout` on exercises only, so "make it 30 minutes" then "dumbbells only"
+   on a session that needed no exercise swap was reported done and never written (the key now
+   covers constraints, title and status).

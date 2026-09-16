@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { sendMessage, serviceOptions } from '@/coach/coachService'
 import { buildContextSnapshot } from '@/coach/context'
@@ -33,10 +34,7 @@ function reset() {
 }
 
 // A positive claim of change (“Logged …”), not a negation (“no meals logged”, “nothing planned”).
-// “Planned yesterday: Upper Body (done).” is a day report (coach.report.planned), not a claim: a
-// “planned” that is followed by a colon before the sentence ends is a headline, so it is excluded.
-// The tool claim “Planned Upper Body for Tuesday.” has no colon and is still caught.
-const CLAIMS = /(?<!\b(?:no|not|nothing|never|already|still|was|were|been|is|are|have|has|had|you've|i've)\s)\b(added|logged|removed|deleted|updated|moved|completed|saved|remembered|planned(?![^.!?\n]*:)|created|set to|noted:|rebuilt|adjusted|scaled|halved)\b/i
+const CLAIMS = /(?<!\b(?:no|not|nothing|never|already|still|was|were|been|is|are|have|has|had|you've|i've)\s)\b(added|logged|removed|deleted|updated|moved|completed|saved|remembered|planned|created|set to|noted:|rebuilt|adjusted|scaled|halved)\b/i
 const FALLBACK = /I want to get this right|Tell me a little more and I will act on it|Not sure I caught that/i
 
 async function say(text: string): Promise<CoachResponse> {
@@ -213,7 +211,7 @@ describe('multi-action, ambiguity, references', () => {
     expect(r.message).toMatch(/kcal/)
     expect(r.message).not.toMatch(/no meals logged/i)
     const planned = await say('What was planned yesterday?')
-    expect(planned.message).toMatch(/planned yesterday|nothing was planned yesterday/i)
+    expect(planned.message).toMatch(/on the plan yesterday|nothing was planned yesterday/i)
     const week = await say('What did I do this week?')
     expect(week.message).toMatch(/this week/i)
   })

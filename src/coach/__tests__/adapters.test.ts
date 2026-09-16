@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import type { CoachModelInput } from '@/coach/model'
 import { ProviderError, buildModelInput, resetModelToolLedger, runModelTurn, toolDefinitions } from '@/coach/model'

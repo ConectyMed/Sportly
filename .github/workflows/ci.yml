@@ -90,5 +90,16 @@ jobs:
       - name: Unit tests (in-memory and Postgres, nothing skipped)
         run: pnpm test:unit
 
+      # The coach suites run on an injected clock (src/coach/__tests__/clock.ts).
+      # One green day proves nothing about the next: the journeys speak in
+      # relative dates and the demo seed places sessions by weekday, so the
+      # same family is run once per weekday of a full week.
+      - name: Coach suites on every weekday of a week
+        run: |
+          for d in 14 15 16 17 18 19 20; do
+            echo "== SPORTLY_TEST_NOW=2026-09-$d"
+            SPORTLY_TEST_NOW=2026-09-$d pnpm vitest run src/coach
+          done
+
       - name: Build and scan the bundle for server configuration
         run: pnpm build

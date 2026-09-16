@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildContext, sendMessage, serviceOptions } from '@/coach/coachService'
 import { analyzeDescription, applyCorrection, buildMeal, LocalFoodAnalysisProvider } from '@/coach/food/foodAnalysis'

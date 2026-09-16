@@ -349,6 +349,7 @@ export const coach = {
   'coach.reschedule.none': 'I do not see a planned workout on {day}. Want me to schedule one?',
   'coach.reschedule.which': 'Which day should I move {title} to?',
   'coach.reschedule.moved': 'Moved {title} from {from} to {to}.',
+  'coach.reschedule.sameDay': '{title} is already on {day}. Nothing to move.',
   'coach.reschedule.clash': ' You now have two sessions on {day}; tell me if you want the other one moved too.',
   'coach.reschedule.reason': 'Your recovery spacing still works.',
   'coach.reschedule.calm': 'Life happens, plans bend.',
@@ -608,7 +609,7 @@ export const coach = {
   'coach.tomorrow.restCalm': 'Rest is part of the plan.',
 
   // ---- day report
-  'coach.report.planned': 'Planned {label}: {list}.',
+  'coach.report.planned': 'On the plan {label}: {list}.',
   'coach.report.nothingPlanned': 'Nothing was planned {label}.',
   'coach.report.trained': 'Trained {label}: {list}.',
   'coach.report.noCompleted': 'No completed session {label}.',

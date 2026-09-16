@@ -1,3 +1,4 @@
+import './clock'
 import { describe, expect, it } from 'vitest'
 import { buildDemoSeed } from '@/domain/demo'
 import { parseIntent } from '@/coach/intents'

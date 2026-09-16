@@ -555,6 +555,14 @@ function respond(intent: Intent, req: CoachRequest, ctx: CoachContext, voice: Vo
         return { text: voice.compose({ core: T('coach.reschedule.none', { day: day(fromDayKey(fromDate)) }) }), suggestions: [T('coach.sug.planWeek'), T('coach.sug.buildToday')] }
       }
       if (!toDate) return { text: voice.compose({ core: T('coach.reschedule.which', { title: evTitle(ev) }) }), expects: 'reschedule_day', suggestions: [T('common.tomorrow'), tr.weekday(3), tr.weekday(6)] }
+      // "Move tomorrow's workout to Friday" on a Thursday: it is already there. Say so; a no-op is not a move.
+      if (ev.date === toDate) {
+        return {
+          text: voice.compose({ core: T('coach.reschedule.sameDay', { title: evTitle(ev), day: day(fromDayKey(toDate)) }) }),
+          suggestions: [T('coach.sug.showCalendar'), T('coach.sug.planWeek')],
+          contextPatch: { lastEventId: ev.id, topic: 'calendar' },
+        }
+      }
       const clash = ctx.events.find((e) => e.type === 'workout' && e.date === toDate && e.status === 'planned' && e.id !== ev.id)
       return {
         text: voice.compose({ core: `${T('coach.reschedule.moved', { title: evTitle(ev), from: day(fromDayKey(fromDate)), to: day(fromDayKey(toDate)) })}${clash ? T('coach.reschedule.clash', { day: day(fromDayKey(toDate)) }) : ''}`, reason: T('coach.reschedule.reason'), calm: T('coach.reschedule.calm'), push: T('coach.reschedule.push') }),
