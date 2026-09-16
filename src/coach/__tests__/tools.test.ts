@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { buildContextSnapshot, selectDaySummary } from '@/coach/context'
 import { analyzeDescription, buildMeal } from '@/coach/food/foodAnalysis'
@@ -158,6 +159,21 @@ describe('action tools', () => {
     expect(executeAction({ type: 'remove_workout', workoutId: w.id })).toMatchObject({ ok: false, error: 'not_allowed' })
     // Failures are audited too.
     expect(state().actionLog.filter((a) => !a.ok).length).toBeGreaterThan(5)
+  })
+
+  it('two different updates to one workout inside the repeat window are both applied', () => {
+    // "Make it 30 minutes" then "dumbbells only" can leave the exercise list untouched and differ only
+    // in constraints. The ledger key covers what the write changes, so the second is a call, not a repeat.
+    const w = generateWorkout({ user: state().user!, goals: state().goals, history: [], date: today })
+    executeAction({ type: 'create_workout', workout: w })
+    const shorter = executeAction({ type: 'update_workout', workout: { ...w, constraints: { ...(w.constraints ?? {}), minutes: 30 } } })
+    const equipment = executeAction({ type: 'update_workout', workout: { ...w, constraints: { ...(w.constraints ?? {}), minutes: 30, equipment: ['dumbbell'] } } })
+    expect(shorter).toMatchObject({ ok: true, idempotent: undefined })
+    expect(equipment).toMatchObject({ ok: true, idempotent: undefined })
+    expect(state().workouts[w.id].constraints).toEqual({ ...(w.constraints ?? {}), minutes: 30, equipment: ['dumbbell'] })
+    // The very same update again is still a repeat.
+    const again = executeAction({ type: 'update_workout', workout: { ...w, constraints: { ...(w.constraints ?? {}), minutes: 30, equipment: ['dumbbell'] } } })
+    expect(again).toMatchObject({ ok: true, idempotent: true })
   })
 
   it('is idempotent: the same call twice never creates two entities', () => {

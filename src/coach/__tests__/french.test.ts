@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { sendMessage, serviceOptions, startFirstConversation } from '@/coach/coachService'
 import { parseIntent, parseMealCorrections } from '@/coach/intents'
@@ -9,7 +10,7 @@ import { buildDemoSeed } from '@/domain/demo'
 import { en } from '@/i18n/en'
 import { fr as frDict } from '@/i18n/fr'
 import { getLanguage, setActiveLanguage } from '@/i18n'
-import { addDays, dayKey, todayKey } from '@/lib/dates'
+import { addDays, dayKey, fromDayKey, todayKey } from '@/lib/dates'
 import { selectDailyNutrition } from '@/store/selectors'
 import { useStore } from '@/store/useStore'
 
@@ -263,12 +264,22 @@ describe('French conversational journey (real pipeline, real state)', () => {
     expect(inWindow()).toBe(4)
     await say('En fait, fais-en trois.')
     expect(inWindow()).toBe(3)
-    const next = planned()[0]
-    await say('Fais-la plus courte.')
+    // "la" needs an antecedent. A week rebuild leaves none in the conversation, and whether today
+    // happens to hold a session depends on the weekday; asking about the next session's day sets it
+    // on every date.
+    const next = planned().sort((a, b) => a.scheduledFor.localeCompare(b.scheduledFor))[0]
+    const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi']
+    const r3b = await say(`Qu’est-ce qui est prévu ${jours[fromDayKey(next.scheduledFor).getDay()]} ?`)
+    expect(r3b.references?.some((x) => x.id === next.id)).toBe(true)
+    const before = state().workouts[next.id].estimatedMinutes
+    const r3c = await say('Fais-la plus courte.')
+    expect(r3c.actions.some((a) => a.tool === 'update_workout' && a.ok)).toBe(true)
+    expect(state().workouts[next.id].estimatedMinutes).toBeLessThan(before)
     const r4 = await say('Déplace-la à vendredi.')
-    if (r4.actions.some((a) => a.tool === 'reschedule_workout' && a.ok)) {
-      expect(new Date(state().workouts[next.id]?.scheduledFor ?? state().workouts[state().conversations.find((c) => c.id === state().activeConversationId)!.context.lastWorkoutId!]?.scheduledFor).getDay()).toBe(5)
-    }
+    const moved = r4.actions.some((a) => (a.tool === 'reschedule_workout' || a.tool === 'move_event') && a.ok)
+    // Already on a Friday: the coach says so and moves nothing. Otherwise it lands on a Friday.
+    expect(moved || /déjà/.test(r4.message)).toBe(true)
+    if (moved) expect(fromDayKey(state().workouts[next.id].scheduledFor).getDay()).toBe(5)
   })
 
   it('dates, numbers and plurals are French in replies', async () => {

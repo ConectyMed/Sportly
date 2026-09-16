@@ -1,3 +1,4 @@
+import './clock'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { sendMessage, serviceOptions } from '@/coach/coachService'
 import { parseIntent } from '@/coach/intents'

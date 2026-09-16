@@ -347,6 +347,7 @@ export const coach: Record<keyof typeof en, string> = {
   'coach.reschedule.none': 'Je ne vois pas de séance prévue {day}. Tu veux que j’en planifie une ?',
   'coach.reschedule.which': 'Je déplace {title} à quel jour ?',
   'coach.reschedule.moved': '{title} déplacée de {from} à {to}.',
+  'coach.reschedule.sameDay': '{title} est déjà prévue {day}. Rien à déplacer.',
   'coach.reschedule.clash': ' Tu as maintenant deux séances {day} ; dis-moi si tu veux aussi déplacer l’autre.',
   'coach.reschedule.reason': 'Ton espacement de récupération tient toujours.',
   'coach.reschedule.calm': 'La vie fait son truc, le plan s’adapte.',

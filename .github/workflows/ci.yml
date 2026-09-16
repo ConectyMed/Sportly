@@ -67,6 +67,12 @@ jobs:
       - name: Load the Ciqual snapshot and report the row count
         run: node scripts/ingest-ciqual.mjs apply --in data/ciqual
 
+      # The synonym seed points at Ciqual rows, so it goes in after them. The
+      # matching suite also loads the same file itself; this step proves the
+      # script that production runs applies it.
+      - name: Load the food synonym seed
+        run: node scripts/seed-food-synonyms.mjs apply --in data/food-matching/synonyms.fr.json
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -83,6 +89,17 @@ jobs:
 
       - name: Unit tests (in-memory and Postgres, nothing skipped)
         run: pnpm test:unit
+
+      # The coach suites run on an injected clock (src/coach/__tests__/clock.ts).
+      # One green day proves nothing about the next: the journeys speak in
+      # relative dates and the demo seed places sessions by weekday, so the
+      # same family is run once per weekday of a full week.
+      - name: Coach suites on every weekday of a week
+        run: |
+          for d in 14 15 16 17 18 19 20; do
+            echo "== SPORTLY_TEST_NOW=2026-09-$d"
+            SPORTLY_TEST_NOW=2026-09-$d pnpm vitest run src/coach
+          done
 
       - name: Build and scan the bundle for server configuration
         run: pnpm build

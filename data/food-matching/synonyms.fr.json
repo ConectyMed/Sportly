@@ -1,0 +1,13 @@
+{
+  "note": "Shared synonym seed for sportly_food_synonyms: free-text term → one Ciqual food. Every row is here because running data/food-matching/terms.fr.json through similarity alone (server/__tests__/postgresFoodMatching.test.ts, 'without synonyms') could not put the right food in front of the user: the term fell below the candidate gate, its ten ranked candidates did not contain it, or — once, \"raisin\" — an exact match on an English label resolved it to the wrong food. A term that lands in the ambiguous band with the right food among its candidates is not seeded — that is the resolver working. Applied by scripts/seed-food-synonyms.mjs after the Ciqual snapshot; the foreign key needs the Ciqual rows first.",
+  "synonyms": [
+    { "term": "yaourt nature", "ciqualAlimCode": 19593, "why": "no_match: \"Yaourt ou lait fermenté, nature\" spreads the two words across the label; containment 0.50, under the 0.6 gate" },
+    { "term": "thon en boîte", "ciqualAlimCode": 26039, "why": "no_match: Ciqual says \"appertisé\", never \"en boîte\"; nothing reaches the gate" },
+    { "term": "tomate", "ciqualAlimCode": 20276, "why": "ambiguous without the right food: every raw tomato carries a variety in its name (\"Tomate ronde\"), so ten processed \"Tomate, …\" rows outrank them" },
+    { "term": "lentilles cuites", "ciqualAlimCode": 20360, "why": "ambiguous without the right food: \"Lentille, bouillie/cuite à l'eau (aliment moyen)\" has containment 0.50, under the gate; only \"Lentille, cuisinée, appertisée\" passes" },
+    { "term": "jambon blanc", "ciqualAlimCode": 28900, "why": "ambiguous without the right food: Ciqual says \"Jambon cuit\"; \"blanc\" matches sandwiches and turkey ham" },
+    { "term": "beurre", "ciqualAlimCode": 16400, "why": "ambiguous without the right food: \"Haricot beurre\" and \"Huile ou beurre de …\" outrank \"Beurre à 80% MG minimum, doux\" in name and in label" },
+    { "term": "baguette", "ciqualAlimCode": 7007, "why": "ambiguous without the right food: the word only ever appears in a parenthetical, so the sandwiches outrank the bread" },
+    { "term": "raisin", "ciqualAlimCode": 13395, "why": "resolved to the WRONG food: Ciqual's English label for \"Raisin sec\" is \"Raisin\", so the V8b exact match on either language hands the French word for grape to dried grapes. The one confident wrong answer in the test set; a synonym outranks an exact label" }
+  ]
+}

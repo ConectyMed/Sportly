@@ -21,7 +21,7 @@ describePostgres('postgres nutrition', ({ pool, sql }) => {
   const T0 = new Date('2026-01-01T00:00:00.000Z')
 
   beforeEach(async () => {
-    await pool.query('truncate off.products, sportly_foods, sportly_food_aliases')
+    await pool.query('truncate off.products, sportly_foods, sportly_food_aliases, sportly_food_synonyms')
   })
 
   it('keeps Open Food Facts in its own schema, with no reference in either direction', async () => {
@@ -112,9 +112,9 @@ describePostgres('postgres nutrition', ({ pool, sql }) => {
     await expect(store.putSportlyFood({ ...sportlyEgg, foodId: 'bad2', origin: 'sportly', subjectId: SUBJECT_A }, at)).rejects.toMatchObject({ code: 'PERSISTENCE_FAILURE' })
   })
 
-  it('returns unresolved, with every source tried, for a label nobody has', async () => {
-    expect(await resolveFood({ label: 'a food that does not exist anywhere' }, { store })).toEqual({
-      status: 'unresolved', reason: 'no_match', query: { barcode: null, label: 'a food that does not exist anywhere' }, tried: ['ciqual', 'sportly'], candidates: [],
+  it('returns unresolved, with every source tried, for a label nothing resembles', async () => {
+    expect(await resolveFood({ label: 'zzqx vwrk plmnt' }, { store })).toEqual({
+      status: 'unresolved', reason: 'no_match', query: { barcode: null, label: 'zzqx vwrk plmnt' }, tried: ['ciqual', 'sportly'], candidates: [],
     })
   })
 })

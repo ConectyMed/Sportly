@@ -1,11 +1,14 @@
-import type { CiqualFoodRow, NutritionStore, OffProductRow, SportlyFoodInput, SportlyFoodRow } from '../nutrition/store.js'
+import type { CiqualFoodRow, CiqualSimilarRow, FoodSynonymRow, NutritionStore, OffProductRow, SportlyFoodInput, SportlyFoodRow } from '../nutrition/store.js'
 import type { OffFetch } from '../nutrition/off.js'
 
 /**
  * A stub nutrition store for logic tests: a Map per table, exact matching on a
- * crude fold of the label. It proves nothing about the SQL — that is what
- * postgresNutrition.test.ts is for — only that the resolver and the lookup
- * do the right thing with what a store gives them.
+ * crude fold of the label, and *canned* similarity — a test seeds the ranked,
+ * scored candidate list a label returns, because the scores are the
+ * database's and only postgresFoodMatching.test.ts can produce real ones. It
+ * proves nothing about the SQL — that is what the Postgres suites are for —
+ * only that the resolver and the lookup do the right thing with what a store
+ * gives them.
  */
 const fold = (s: string) =>
   s
@@ -20,15 +23,20 @@ export interface StubStore extends NutritionStore {
   off: Map<string, OffProductRow>
   ciqual: CiqualFoodRow[]
   sportly: Array<SportlyFoodRow & { aliases: string[] }>
+  synonyms: FoodSynonymRow[]
+  /** Canned similarity answers by folded label: the gated, ranked list the database would return. */
+  similar: Map<string, CiqualSimilarRow[]>
   calls: string[]
 }
 
-export function stubStore(seed: { ciqual?: CiqualFoodRow[]; sportly?: SportlyFoodInput[]; off?: OffProductRow[] } = {}): StubStore {
+export function stubStore(seed: { ciqual?: CiqualFoodRow[]; sportly?: SportlyFoodInput[]; off?: OffProductRow[]; synonyms?: FoodSynonymRow[]; similar?: Record<string, CiqualSimilarRow[]> } = {}): StubStore {
   const store: StubStore = {
     engine: 'memory',
     off: new Map((seed.off ?? []).map((r) => [r.barcode, r])),
     ciqual: [...(seed.ciqual ?? [])],
     sportly: [...(seed.sportly ?? [])],
+    synonyms: [...(seed.synonyms ?? [])],
+    similar: new Map(Object.entries(seed.similar ?? {}).map(([label, rows]) => [fold(label), rows])),
     calls: [],
     async getOffProduct(barcode) {
       store.calls.push(`getOffProduct:${barcode}`)
@@ -55,8 +63,40 @@ export function stubStore(seed: { ciqual?: CiqualFoodRow[]; sportly?: SportlyFoo
       store.sportly = store.sportly.filter((r) => r.foodId !== food.foodId)
       store.sportly.push({ ...food })
     },
+    async getCiqualFood(alimCode) {
+      store.calls.push(`getCiqualFood:${alimCode}`)
+      return store.ciqual.find((r) => r.alimCode === alimCode) ?? null
+    },
+    async getSportlyFood(foodId, subjectId) {
+      store.calls.push(`getSportlyFood:${foodId}:${subjectId ?? ''}`)
+      return store.sportly.find((r) => r.foodId === foodId && (r.subjectId === null || r.subjectId === subjectId)) ?? null
+    },
+    async findFoodSynonyms(label, subjectId) {
+      store.calls.push(`findFoodSynonyms:${label}:${subjectId ?? ''}`)
+      const key = fold(label)
+      return store.synonyms
+        .filter((s) => fold(s.term) === key && (s.subjectId === null || s.subjectId === subjectId))
+        .sort((a, b) => Number(b.subjectId !== null) - Number(a.subjectId !== null))
+    },
+    async putFoodSynonym(synonym) {
+      store.synonyms = store.synonyms.filter((s) => !(fold(s.term) === fold(synonym.term) && s.subjectId === synonym.subjectId))
+      store.synonyms.push({ ...synonym })
+    },
+    async findCiqualSimilar(label, thresholds) {
+      store.calls.push(`findCiqualSimilar:${label}`)
+      const rows = (store.similar.get(fold(label)) ?? []).filter((r) => r.containment >= thresholds.low)
+      // The database's ordering: confident first, then by name match, then by score.
+      return [...rows]
+        .sort((a, b) => Number(b.score >= thresholds.high) - Number(a.score >= thresholds.high) || b.nameScore - a.nameScore || b.score - a.score || a.alimCode - b.alimCode)
+        .slice(0, thresholds.limit)
+    },
   }
   return store
+}
+
+/** A canned similarity candidate: a Ciqual row plus the numbers the database would attach. */
+export function similar(row: CiqualFoodRow, score: number, extra: { containment?: number; nameScore?: number } = {}): CiqualSimilarRow {
+  return { ...row, score, containment: extra.containment ?? 1, nameScore: extra.nameScore ?? score }
 }
 
 export const ciqualApple: CiqualFoodRow = {

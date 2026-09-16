@@ -1,3 +1,4 @@
+import './clock'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { sendMessage, serviceOptions } from '@/coach/coachService'
 import { buildContextSnapshot } from '@/coach/context'

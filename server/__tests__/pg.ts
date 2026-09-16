@@ -1,4 +1,4 @@
-import { Pool } from 'pg'
+import { Pool, type PoolClient } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest'
 import { createPostgresStore, type SqlExecutor } from '../store/postgres.js'
 import { requireRealStorageEngine, type BoundaryStore } from '../store/port.js'
@@ -15,12 +15,20 @@ import { requireRealStorageEngine, type BoundaryStore } from '../store/port.js'
  * Locally:
  *
  *   createdb sportly_test
- *   psql -d sportly_test -f migrations/0001_model_call_log.sql
- *   psql -d sportly_test -f migrations/0002_hold_lifecycle.sql
- *   SPORTLY_TEST_DATABASE_URL=postgres://…/sportly_test pnpm test:unit
+ *   for f in migrations/*.sql; do psql -d sportly_test -v ON_ERROR_STOP=1 -f "$f"; done
+ *   export SPORTLY_TEST_DATABASE_URL=postgres://…/sportly_test
+ *   node scripts/ingest-ciqual.mjs apply --in data/ciqual
+ *   node scripts/seed-food-synonyms.mjs apply --in data/food-matching/synonyms.fr.json
+ *   pnpm test:unit
  *
  * To skip them knowingly — and only then — set SPORTLY_SKIP_POSTGRES_TESTS=1.
  * The skip is visible in the run summary; CI never sets it.
+ *
+ * One database, several suites, parallel workers: every suite truncates
+ * tables before each test, so two suites running at once would truncate each
+ * other's rows mid-test. A session-level advisory lock, taken for the whole
+ * suite, serialises them at the database — the one place all the workers
+ * meet — rather than depending on how vitest happens to schedule files.
  */
 export const TEST_DATABASE_URL = process.env.SPORTLY_TEST_DATABASE_URL
 
@@ -31,6 +39,11 @@ export interface PgFixture {
   sql: SqlExecutor
   store: BoundaryStore
 }
+
+/** Any fixed key; every real-Postgres suite takes the same one. */
+const SUITE_LOCK_KEY = 0x5b0071
+/** Waiting for the suites ahead in the queue, each a few seconds long. */
+const SUITE_LOCK_TIMEOUT_MS = 180_000
 
 /**
  * Declare a suite that runs against the real database. The fixture's tables
@@ -61,9 +74,22 @@ export function describePostgres(name: string, suite: (pg: PgFixture) => void): 
     const sql = (async (text: string, params: unknown[]) => pool.query(text, params)) as SqlExecutor
     const store = createPostgresStore(sql)
     const fixture: PgFixture = { pool, sql, store }
+    let lockHolder: PoolClient | undefined
 
-    beforeAll(() => requireRealStorageEngine(store, name))
-    afterAll(() => pool.end())
+    beforeAll(async () => {
+      requireRealStorageEngine(store, name)
+      // Held on its own connection for the suite's lifetime; released in afterAll or when the session ends.
+      lockHolder = await pool.connect()
+      await lockHolder.query('select pg_advisory_lock($1)', [SUITE_LOCK_KEY])
+    }, SUITE_LOCK_TIMEOUT_MS)
+    afterAll(async () => {
+      try {
+        await lockHolder?.query('select pg_advisory_unlock($1)', [SUITE_LOCK_KEY])
+      } finally {
+        lockHolder?.release()
+        await pool.end()
+      }
+    })
     beforeEach(async () => {
       await pool.query('truncate sportly_spend_hold, sportly_model_call_log, sportly_spend_bucket, sportly_mint_bucket, sportly_subject')
     })
