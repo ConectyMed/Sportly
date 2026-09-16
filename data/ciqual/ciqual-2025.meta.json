@@ -1,0 +1,65 @@
+{
+  "version": "Ciqual 2025",
+  "doi": "doi:10.57745/RDMHWY",
+  "datasetUrl": "https://entrepot.recherche.data.gouv.fr/dataset.xhtml?persistentId=doi:10.57745/RDMHWY",
+  "licence": "Licence Ouverte / Open Licence 2.0 (Etalab)",
+  "licenceUrl": "https://www.etalab.gouv.fr/licence-ouverte-open-licence",
+  "attribution": "Source : Anses. Table de composition nutritionnelle des aliments Ciqual 2025 (ciqual.anses.fr).",
+  "datasetVersion": "1.0",
+  "datasetReleased": "2025-11-19T16:29:04Z",
+  "sourceFiles": [
+    {
+      "id": 666252,
+      "filename": "alim_2025_11_03.xml",
+      "contentType": "text/xml",
+      "filesize": 1581031,
+      "checksum": "MD5:8e1171d63cee4b6010cfce25dd29243d"
+    },
+    {
+      "id": 666249,
+      "filename": "compo_2025_11_03.xml",
+      "contentType": "text/xml",
+      "filesize": 69243149,
+      "checksum": "MD5:2da725585946434df320d8041631998b"
+    },
+    {
+      "id": 666246,
+      "filename": "const_2025_11_03.xml",
+      "contentType": "text/xml",
+      "filesize": 17955,
+      "checksum": "MD5:d8f2f25fdacb887bc993a6eeaf80f203"
+    }
+  ],
+  "fetchedAt": "2026-09-15T23:12:07.088Z",
+  "constituentCodes": {
+    "energy_kcal": 328,
+    "energy_kj": 327,
+    "protein_g": 25003,
+    "carbs_g": 31000,
+    "sugars_g": 32000,
+    "fat_g": 40000,
+    "saturated_fat_g": 40302,
+    "fibre_g": 34100,
+    "salt_g": 10004,
+    "water_g": 400
+  },
+  "foodCount": 3484,
+  "columns": [
+    "alim_code",
+    "name_fr",
+    "name_en",
+    "group_code",
+    "subgroup_code",
+    "subsubgroup_code",
+    "energy_kcal",
+    "energy_kj",
+    "protein_g",
+    "carbs_g",
+    "sugars_g",
+    "fat_g",
+    "saturated_fat_g",
+    "fibre_g",
+    "salt_g",
+    "water_g"
+  ]
+}

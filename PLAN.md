@@ -66,3 +66,57 @@
 5. **In-memory guard rail.** `BoundaryStore.engine`; `requireRealStorageEngine` throws for the
    memory adapter; the Postgres fixture calls it in `beforeAll`. The in-memory "concurrency"
    test in `boundary.test.ts` is retitled as logic-only.
+
+# V8b — Nutrition data layer
+
+1. Scope held to data: no vision adapter, no `/scan` route, no model call in the diff.
+   `server/nutrition/` is importable by the scan session later and by nothing yet.
+2. Three sources, three homes, chosen by licence (`migrations/0003_nutrition_data.sql`,
+   additive only): `ciqual_foods` + `ciqual_ingest` (ANSES Ciqual 2025, Licence Ouverte 2.0,
+   joinable, attribution required); `off.products` in its **own schema** (Open Food Facts,
+   ODbL share-alike — a per-barcode API cache, never the dump, no foreign key in either
+   direction, nothing in `public` derived from it); `sportly_foods` + `sportly_food_aliases`
+   (ours: typical portions, `kind = 'dish'` placeholder for composed dishes, user-confirmed
+   corrections scoped by `subject_id`).
+3. **Ciqual comes from the official source.** `scripts/ingest-ciqual.mjs fetch` reads the
+   ANSES dataset on Recherche Data Gouv (doi:10.57745/RDMHWY, files `alim/compo/const_2025_11_03.xml`),
+   resolves each constituent by *name* and cross-checks its code (EU energy kcal 328, protein N×6.25
+   25003, carbs 31000, fat 40000, fibre 34100, …; a rename fails the run), and writes a
+   committed snapshot `data/ciqual/ciqual-2025.csv` + `.meta.json` with DOI, checksums,
+   licence and attribution. `apply` loads the snapshot; CI and production load the same
+   bytes and never depend on the source being up. The sandbox this was built in cannot
+   reach data.gouv.fr, so the fetch ran on GitHub Actions (`.github/workflows/nutrition-data.yml`),
+   which commits the snapshot back to the branch.
+4. **Exact matching, in the database.** `sportly_label_norm(text)` (lower-case, accents folded,
+   ligatures expanded, whitespace collapsed; no `unaccent` extension) is applied to stored
+   names as generated columns and to the query in the `WHERE`, so no TypeScript re-implements
+   it. A label matches a food only when the whole normalised label is equal; a prefix is not
+   a match and two equal names are `ambiguous`, with candidates, never a pick.
+5. **Resolution order** (`server/nutrition/resolve.ts`): barcode → `off.products` (API on a
+   miss, 30-day cache, not-found cached 1 day, stale row served marked stale when OFF is
+   down) | label → `ciqual_foods` | → `sportly_foods` (a subject's own correction wins) |
+   → `unresolved` with `reason` ∈ {empty_query, no_match, ambiguous, source_unavailable},
+   the sources `tried`, and the query echoed. `source_unavailable` exists so a caller never
+   records "unknown food" because OFF was unreachable.
+6. **One place for numbers.** `macrosForPortion(per100g, grams)` (`server/nutrition/macros.ts`)
+   is pure: no I/O, no clock. A nutrient the source lacks stays `null`; energy is the source's
+   kcal, else derived with the Regulation 1169/2011 factors (4/4/9, fibre 2) and flagged
+   `kcalDerived`. Tested against hand-computed values.
+7. **Attribution on every resolved food** (`server/nutrition/attribution.ts`): provider,
+   licence and URL, the credit line worded as each provider asks, a link to the food's page,
+   and `required` (true for ANSES and OFF, false for our own rows).
+8. Tests: `nutritionMacros`, `nutritionOff`, `nutritionResolve` (logic, stub store, injected
+   fetch, no network) and `postgresNutrition` (real Postgres via `describePostgres`: schema
+   separation, exact matching on the real Ciqual rows, cache round-trip, constraints).
+   CI applies the snapshot before the suite. Nothing in the test suite touches the network;
+   `scripts/off-lookup.mjs` is the live smoke check, run by the data workflow.
+9. Deliberately out of scope: composed-dish components, confidence, meal drafts. They belong
+   to the scan session; the schema leaves room (`kind`, `subject_id`, `ciqual_alim_code`).
+10. **Tests cannot fail the production build.** Vercel runs `pnpm build`, which starts with
+    `tsc -b` over tsconfig.json's references (app, node, server). Those now exclude
+    `server/__tests__` and `src/**/__tests__`; the suites are typechecked by their own
+    programs, `tsconfig.server-tests.json` and `tsconfig.app-tests.json`, through
+    `pnpm typecheck` (= `tsc -b && pnpm typecheck:tests`), which is what CI runs. Proven by
+    breaking a test file in each tree: `pnpm build` exit 0, `pnpm typecheck` exit 2 naming the
+    file; then reverted. `check-api-esm-load` and `off-lookup` emit with tsconfig.server.json,
+    so they stop compiling tests too.

@@ -1,0 +1,10 @@
+{
+  /* The client test suite; see tsconfig.server-tests.json for why it is separate. */
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app-tests.tsbuildinfo"
+  },
+  "include": ["src/**/__tests__"],
+  "exclude": []
+}
