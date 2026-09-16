@@ -120,3 +120,55 @@
     breaking a test file in each tree: `pnpm build` exit 0, `pnpm typecheck` exit 2 naming the
     file; then reverted. `check-api-esm-load` and `off-lookup` emit with tsconfig.server.json,
     so they stop compiling tests too.
+
+# V8c — Food label matching
+
+1. Scope held to label matching: no vision adapter, no `/scan` route, no model call in the diff.
+   The resolver's shape from V8b stands — `no_match`, `ambiguous` with candidates,
+   `source_unavailable` — and gains the strategy behind it, which was exact and therefore
+   resolved almost nothing a vision model actually says.
+2. **pg_trgm, additively** (`migrations/0004_food_matching.sql`): `create extension if not exists
+   pg_trgm`, a GIN `gin_trgm_ops` index on `ciqual_foods.name_fr_norm` (the planner uses it on its
+   own at 3,484 rows; the candidate query runs in ~1.5 ms), `sportly_label_head(text)` (a label's
+   food name: before the first comma, parenthetical dropped) and the table `sportly_food_synonyms`.
+   Nothing from 0001–0003 is altered. French labels only: "orange" landing on "Orange juice" would
+   be noise, not recall.
+3. **Two measures, one policy** (`server/nutrition/matching.ts`, thresholds passed into the SQL as
+   parameters — the Neon HTTP driver carries no session state, so no `SET`):
+   `similarity(query, label)` over the whole label is the confidence; `word_similarity(query,
+   label)` is the candidate gate. Bands: exactly one candidate at or above `SIMILARITY_HIGH = 0.75`
+   resolves (two is ambiguity, not a coin toss); anything above `SIMILARITY_LOW = 0.6` is
+   `ambiguous` with the ten candidates ranked and scored; nothing is `no_match`. Ranking inside
+   the band is by name match then score, so "Banane, chair sans peau, crue" sits above "Nectar de
+   banane". Both values come from the test set: the highest score a wrong food reaches at the top
+   of a ranking is 0.700 ("haricots verts" → "Haricots verts, purée"), the lowest a right food
+   reaches with a qualifier is 0.810 ("lait demi-écrémé" → "Lait demi-écrémé, UHT"); 0.75 sits in
+   the gap. Between a gate of 0.5 and 0.6 the set moves by one term either way, and 0.6 is
+   pg_trgm's shipped `word_similarity_threshold`, so the index-served `<%` operator and the policy
+   agree — asserted by the Postgres suite.
+4. **Synonyms take precedence** — over similarity and over an exact label, because a synonym is an
+   explicit statement. `sportly_food_synonyms` maps a free-text term to one canonical food (a Ciqual
+   row or a Sportly row, never an OFF product), keyed by `(term_norm, scope)`: a subject's own
+   `user_correction` row and the shared `sportly` row for the same term coexist, the subject's wins
+   for that subject only. This is where a user correction lands and where it is reused. The seed
+   (`data/food-matching/synonyms.fr.json`, applied by `scripts/seed-food-synonyms.mjs` after the
+   Ciqual ingest, in CI too) holds eight rows, each one there because the test set proved the
+   resolver alone could not put the right food in front of the user; the suite asserts the seed's
+   terms are exactly the measured misses, so a stale or missing seed row fails CI.
+5. **The test set is the point** (`data/food-matching/terms.fr.json`): 50 French terms a vision
+   model emits — short, common, unqualified — none of them a Ciqual label, each with the codes that
+   count as right. Without synonyms: 6 resolved right, 35 ambiguous with the right food listed
+   (first in 21), 5 ambiguous without it, 2 wrongly `no_match`, 1 rightly `no_match` ("granola"),
+   and **one confident wrong answer, named**: "raisin" → "Raisin sec", not by similarity but by
+   V8b's exact match on the *English* label ("Raisin" is English for dried grape). Seeded. With
+   the seed: 14 resolved right, 0 wrong, every term Ciqual covers resolved or listed.
+   `scripts/food-matching-report.mjs` prints the table through the real code path, read-only.
+6. Tests: `nutritionMatching` (bands, precedence, subject scoping, thresholds in force; canned
+   scores against the stub) and `postgresFoodMatching` (extension, index plan, GUC agreement, the
+   whole test set twice, real scores, the correction round trip, constraints and cascade). The
+   real-Postgres fixture now takes a session advisory lock per suite: every suite truncates tables
+   before each test, and a fifth Postgres file made parallel workers truncate each other's rows
+   mid-test on a 4-core box.
+7. Deliberately out of scope: fuzzy matching of synonym terms, English-side similarity, a language
+   hint on the query (which is what would retire the "raisin" class of homograph properly), and
+   any UI for choosing among candidates.

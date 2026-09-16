@@ -1,6 +1,6 @@
 import { BoundaryError } from '../errors.js'
 import type { SqlExecutor } from '../store/postgres.js'
-import type { CiqualFoodRow, NutritionStore, OffProductRow, SportlyFoodRow } from './store.js'
+import type { CiqualFoodRow, FoodSynonymRow, NutritionStore, OffProductRow, SportlyFoodRow } from './store.js'
 
 /**
  * Postgres adapter for the nutrition port. Same shape as the boundary's
@@ -8,9 +8,14 @@ import type { CiqualFoodRow, NutritionStore, OffProductRow, SportlyFoodRow } fro
  * driver error becomes PERSISTENCE_FAILURE with its message kept server-side.
  *
  * Reads from `off.products` and writes to it; reads `ciqual_foods` and
- * `sportly_foods`. There is no statement here that moves a value from the
- * `off` schema into a `public` table — that is the ODbL containment, and it
- * is a property of this file, so keep it that way.
+ * `sportly_foods`; reads and writes `sportly_food_synonyms`. There is no
+ * statement here that moves a value from the `off` schema into a `public`
+ * table — that is the ODbL containment, and it is a property of this file, so
+ * keep it that way.
+ *
+ * Every operation is one statement, with no session state: the Neon HTTP
+ * driver gives each statement its own transaction, so the similarity query
+ * takes its thresholds as parameters rather than from a `SET`.
  */
 
 const num = (v: number | string | null | undefined): number | null => (v === null || v === undefined ? null : typeof v === 'number' ? v : Number(v))
@@ -169,6 +174,29 @@ function toSportlyRow(r: SportlyRowShape): SportlyFoodRow {
   }
 }
 
+interface SynonymRowShape {
+  term: string
+  ciqual_alim_code: number | null
+  sportly_food_id: string | null
+  origin: string
+  subject_id: string | null
+}
+
+function toSynonymRow(r: SynonymRowShape): FoodSynonymRow {
+  return {
+    term: r.term,
+    target: r.ciqual_alim_code !== null ? { source: 'ciqual', alimCode: r.ciqual_alim_code } : { source: 'sportly', foodId: r.sportly_food_id as string },
+    origin: r.origin as FoodSynonymRow['origin'],
+    subjectId: r.subject_id,
+  }
+}
+
+interface CiqualSimilarRowShape extends CiqualRowShape {
+  score: number | string
+  containment: number | string
+  name_score: number | string
+}
+
 export function createPostgresNutritionStore(sql: SqlExecutor): NutritionStore {
   return {
     engine: 'postgres',
@@ -212,6 +240,66 @@ export function createPostgresNutritionStore(sql: SqlExecutor): NutritionStore {
         ),
       )
       return res.rows.map(toCiqualRow)
+    },
+
+    async getCiqualFood(alimCode) {
+      const res = await guard('getCiqualFood', () => sql<CiqualRowShape>(`select ${CIQUAL_COLUMNS} from ciqual_foods where alim_code = $1`, [alimCode]))
+      return res.rows.length ? toCiqualRow(res.rows[0]) : null
+    },
+
+    async getSportlyFood(foodId, subjectId) {
+      const res = await guard('getSportlyFood', () =>
+        sql<SportlyRowShape>(`select ${SPORTLY_COLUMNS} from sportly_foods where food_id = $1 and (subject_id is null or subject_id = $2::uuid)`, [foodId, subjectId ?? null]),
+      )
+      return res.rows.length ? toSportlyRow(res.rows[0]) : null
+    },
+
+    async findFoodSynonyms(label, subjectId) {
+      const res = await guard('findFoodSynonyms', () =>
+        sql<SynonymRowShape>(
+          `select term, ciqual_alim_code, sportly_food_id, origin, subject_id from sportly_food_synonyms
+            where term_norm = sportly_label_norm($1) and (subject_id is null or subject_id = $2::uuid)
+            order by (subject_id is not null) desc`,
+          [label, subjectId ?? null],
+        ),
+      )
+      return res.rows.map(toSynonymRow)
+    },
+
+    async putFoodSynonym(synonym, atIso) {
+      const t = synonym.target
+      await guard('putFoodSynonym', () =>
+        sql(
+          `insert into sportly_food_synonyms (term, ciqual_alim_code, sportly_food_id, origin, subject_id, created_at, updated_at)
+           values ($1, $2, $3, $4, $5::uuid, $6, $6)
+           on conflict (term_norm, scope) do update set
+             term = excluded.term, ciqual_alim_code = excluded.ciqual_alim_code, sportly_food_id = excluded.sportly_food_id,
+             origin = excluded.origin, updated_at = excluded.updated_at`,
+          [synonym.term, t.source === 'ciqual' ? t.alimCode : null, t.source === 'sportly' ? t.foodId : null, synonym.origin, synonym.subjectId, atIso],
+        ),
+      )
+    },
+
+    async findCiqualSimilar(label, thresholds) {
+      // `<%` is word_similarity at the database's threshold and is what the GIN
+      // trigram index serves; the explicit predicate after it is the policy's
+      // own gate. The two agree by construction (see matching.ts) and the
+      // Postgres suite checks that they still do.
+      const res = await guard('findCiqualSimilar', () =>
+        sql<CiqualSimilarRowShape>(
+          `select ${CIQUAL_COLUMNS},
+                  similarity(sportly_label_norm($1), name_fr_norm) as score,
+                  word_similarity(sportly_label_norm($1), name_fr_norm) as containment,
+                  similarity(sportly_label_norm($1), sportly_label_head(name_fr_norm)) as name_score
+             from ciqual_foods
+            where sportly_label_norm($1) <% name_fr_norm
+              and word_similarity(sportly_label_norm($1), name_fr_norm) >= $2::float8
+            order by (similarity(sportly_label_norm($1), name_fr_norm) >= $3::float8) desc, name_score desc, score desc, alim_code
+            limit $4::int`,
+          [label, thresholds.low, thresholds.high, thresholds.limit],
+        ),
+      )
+      return res.rows.map((r) => ({ ...toCiqualRow(r), score: Number(r.score), containment: Number(r.containment), nameScore: Number(r.name_score) }))
     },
 
     async findSportlyByLabel(label, subjectId) {

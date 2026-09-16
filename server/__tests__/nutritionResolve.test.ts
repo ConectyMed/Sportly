@@ -36,10 +36,11 @@ describe('resolveFood — order', () => {
     expect(r).toMatchObject({ status: 'resolved', matchedBy: 'label', tried: ['ciqual', 'sportly'], food: { source: 'sportly', sourceId: 'egg', name: 'Egg', typicalPortion: { grams: 50, unit: 'piece', label: '1 egg' } } })
   })
 
-  it('a label nobody has is unresolved, with every source tried, not a near miss', async () => {
-    const store = stubStore({ ciqual: [ciqualApple], sportly: [sportlyEgg] })
+  it('a label nobody has, exactly or by similarity, is unresolved with every source tried', async () => {
+    const store = stubStore({ ciqual: [ciqualApple], sportly: [sportlyEgg] }) // no canned similarity: the database found nothing above the gate
     const r = await resolveFood({ label: 'pomme' }, { store }) // a prefix of a Ciqual name, an alias of nothing
     expect(r).toEqual({ status: 'unresolved', reason: 'no_match', query: { barcode: null, label: 'pomme' }, tried: ['ciqual', 'sportly'], candidates: [] })
+    expect(store.calls).toContain('findCiqualSimilar:pomme')
   })
 
   it('a barcode alone that OFF does not know is unresolved after OFF only', async () => {
@@ -68,8 +69,8 @@ describe('resolveFood — never guesses', () => {
     const r = await resolveFood({ label: 'Pomme, pulpe et peau, crue' }, { store })
     expect(r).toMatchObject({ status: 'unresolved', reason: 'ambiguous', tried: ['ciqual'] })
     expect(r.status === 'unresolved' && r.candidates).toEqual([
-      { source: 'ciqual', sourceId: '13050', name: 'Pomme, pulpe et peau, crue' },
-      { source: 'ciqual', sourceId: '13051', name: 'Pomme, pulpe et peau, crue' },
+      { source: 'ciqual', sourceId: '13050', name: 'Pomme, pulpe et peau, crue', score: 1 },
+      { source: 'ciqual', sourceId: '13051', name: 'Pomme, pulpe et peau, crue', score: 1 },
     ])
   })
 

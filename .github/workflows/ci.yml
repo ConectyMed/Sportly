@@ -67,6 +67,12 @@ jobs:
       - name: Load the Ciqual snapshot and report the row count
         run: node scripts/ingest-ciqual.mjs apply --in data/ciqual
 
+      # The synonym seed points at Ciqual rows, so it goes in after them. The
+      # matching suite also loads the same file itself; this step proves the
+      # script that production runs applies it.
+      - name: Load the food synonym seed
+        run: node scripts/seed-food-synonyms.mjs apply --in data/food-matching/synonyms.fr.json
+
       - name: Typecheck
         run: pnpm typecheck
 

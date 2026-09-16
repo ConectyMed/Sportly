@@ -72,14 +72,20 @@ export interface FoodQuery {
   subjectId?: string
 }
 
-export type MatchedBy = 'barcode' | 'label'
+/**
+ * How a resolved food was found. `label` is an exact match on the normal
+ * form; `synonym` an exact hit in `sportly_food_synonyms` (a seed row or the
+ * subject's own correction); `similarity` the one candidate above the high
+ * band of the trigram policy (server/nutrition/matching.ts).
+ */
+export type MatchedBy = 'barcode' | 'label' | 'synonym' | 'similarity'
 
 export type UnresolvedReason =
   /** Neither a barcode nor a label was given. */
   | 'empty_query'
   /** Every source in order was tried and none matched. */
   | 'no_match'
-  /** A label matched more than one food exactly; the caller must choose. */
+  /** A label matched more than one food exactly, or similar foods with no one clear winner; the caller must choose from `candidates`. */
   | 'ambiguous'
   /** A source could not be reached and nothing else matched: a retry may succeed, so do not record this as "unknown food". */
   | 'source_unavailable'
@@ -88,8 +94,17 @@ export interface UnresolvedCandidate {
   source: FoodSource
   sourceId: string
   name: string
+  /** Whole-label trigram similarity to the query, 0–1; 1 for an exact match. Candidates come ranked, best first. */
+  score: number
 }
 
 export type Resolution =
-  | { status: 'resolved'; matchedBy: MatchedBy; food: ResolvedFood; tried: FoodSource[] }
+  | {
+      status: 'resolved'
+      matchedBy: MatchedBy
+      food: ResolvedFood
+      tried: FoodSource[]
+      /** The similarity score when `matchedBy` is 'similarity'; null for a barcode, exact-label or synonym match, which carry no score. */
+      score: number | null
+    }
   | { status: 'unresolved'; reason: UnresolvedReason; query: { barcode: string | null; label: string | null }; tried: FoodSource[]; candidates: UnresolvedCandidate[] }
